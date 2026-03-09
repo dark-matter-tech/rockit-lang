@@ -1,0 +1,253 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+            container: swift:5.10.1-jammy
+            archive_ext: tar.gz
+            triple: x86_64-unknown-linux-gnu
+          - platform: macos-arm64
+            runner: macos-14
+            container: ""
+            archive_ext: tar.gz
+            triple: arm64-apple-macosx
+          - platform: macos-x86_64
+            runner: macos-13
+            container: ""
+            archive_ext: tar.gz
+            triple: x86_64-apple-macosx
+          - platform: windows-x86_64
+            runner: windows-latest
+            container: ""
+            archive_ext: zip
+            triple: x86_64-unknown-windows-msvc
+
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+    continue-on-error: ${{ matrix.platform == 'windows-x86_64' }}
+    defaults:
+      run:
+        shell: ${{ matrix.platform == 'windows-x86_64' && 'pwsh' || 'bash' }}
+
+    steps:
+      # -- Linux --
+      - name: Install dependencies (Linux)
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          apt-get update && apt-get install -y git clang-15 curl jq libssl-dev pkg-config gnupg
+          ln -sf /usr/bin/clang-15 /usr/bin/clang
+
+      - name: Checkout (Linux)
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git clone --depth 1 --branch "${GITHUB_REF_NAME}" \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      # -- macOS --
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          brew install openssl@3 pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib" >> "$GITHUB_ENV"
+          echo "CPPFLAGS=-I$(brew --prefix openssl@3)/include" >> "$GITHUB_ENV"
+
+      - name: Checkout (macOS/Windows)
+        if: matrix.platform != 'linux-x86_64'
+        uses: actions/checkout@v4
+
+      # -- Windows --
+      - name: Install Swift (Windows)
+        if: matrix.platform == 'windows-x86_64'
+        uses: compnerd/gha-setup-swift@main
+        with:
+          branch: swift-5.10.1-release
+          tag: 5.10.1-RELEASE
+
+      - name: Install dependencies (Windows)
+        if: matrix.platform == 'windows-x86_64'
+        run: |
+          choco install openssl -y
+          choco install jq -y
+
+      # -- Common build --
+      - name: Set version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+            echo "TAG=v${{ inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          fi
+        shell: bash
+
+      - name: Clone compiler
+        run: |
+          git clone --depth 1 --recurse-submodules --branch staging \
+            https://github.com/dark-matter-tech/rockit-compiler.git /tmp/compiler
+        shell: bash
+
+      - name: Clone and build Stage 0
+        run: |
+          git clone --depth 1 --branch develop \
+            https://github.com/dark-matter-tech/rockit-lang-bootstrap-compiler.git /tmp/booster
+          cd /tmp/booster && swift build -c release
+        shell: bash
+
+      - name: Build Stage 1
+        run: |
+          cd /tmp/compiler
+          bash src/build.sh
+          /tmp/booster/.build/release/rockit build-native src/command.rok
+        shell: bash
+
+      - name: Determine version
+        run: |
+          VERSION=$(/tmp/compiler/src/command version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Build runtime
+        run: cd /tmp/compiler && bash runtime/rockit/build.sh
+        shell: bash
+
+      - name: Clone and build Fuel
+        run: |
+          git clone --depth 1 --branch develop \
+            https://github.com/dark-matter-tech/fuel.git /tmp/fuel || true
+          if [ -d /tmp/fuel ]; then
+            /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
+              -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o \
+              --target-triple ${{ matrix.triple }}
+          fi
+        shell: bash
+
+      - name: Package archive (Unix)
+        if: matrix.archive_ext == 'tar.gz'
+        run: |
+          ARCHIVE="rockit-${VERSION}-${{ matrix.platform }}.tar.gz"
+          STAGING="dist/rockit-${VERSION}-${{ matrix.platform }}/rockit"
+          mkdir -p "${STAGING}/bin" "${STAGING}/share/rockit"
+          cp /tmp/compiler/src/command "${STAGING}/bin/rockit"
+          chmod +x "${STAGING}/bin/rockit"
+          if [ -f /tmp/fuel/fuel ]; then
+            cp /tmp/fuel/fuel "${STAGING}/bin/fuel"
+            chmod +x "${STAGING}/bin/fuel"
+          fi
+          cp /tmp/compiler/runtime/rockit_runtime.o "${STAGING}/share/rockit/"
+          cp -r /tmp/compiler/launchpad "${STAGING}/share/rockit/stdlib"
+          cd dist && tar -czf "${ARCHIVE}" "rockit-${VERSION}-${{ matrix.platform }}"
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Package archive (Windows)
+        if: matrix.archive_ext == 'zip'
+        run: |
+          $archive = "rockit-$env:VERSION-${{ matrix.platform }}.zip"
+          $staging = "dist/rockit-$env:VERSION-${{ matrix.platform }}/rockit"
+          New-Item -ItemType Directory -Force -Path "$staging/bin"
+          New-Item -ItemType Directory -Force -Path "$staging/share/rockit"
+          Copy-Item "/tmp/compiler/src/command.exe" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
+          Copy-Item "/tmp/compiler/src/command" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
+          if (Test-Path "/tmp/fuel/fuel.exe") { Copy-Item "/tmp/fuel/fuel.exe" "$staging/bin/fuel.exe" }
+          if (Test-Path "/tmp/compiler/runtime/rockit_runtime.o") {
+            Copy-Item "/tmp/compiler/runtime/rockit_runtime.o" "$staging/share/rockit/"
+          }
+          if (Test-Path "/tmp/compiler/launchpad") {
+            Copy-Item -Recurse "/tmp/compiler/launchpad" "$staging/share/rockit/stdlib"
+          }
+          Compress-Archive -Path "dist/rockit-$env:VERSION-${{ matrix.platform }}/*" -DestinationPath "dist/$archive"
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rockit-${{ matrix.platform }}
+          path: dist/rockit-${{ env.VERSION }}-${{ matrix.platform }}.${{ matrix.archive_ext }}
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Set version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+            echo "TAG=v${{ inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          fi
+
+      - name: List artifacts
+        run: find artifacts/ -type f | sort
+
+      - name: Create GitHub release
+        run: |
+          FILES=""
+          for artifact_dir in artifacts/rockit-*; do
+            for file in "$artifact_dir"/*; do
+              [ -f "$file" ] && FILES="$FILES $file"
+            done
+          done
+
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Rockit ${TAG}" \
+            --notes "$(cat <<NOTES
+          ## Rockit ${TAG}
+
+          ### What's Included
+
+          - **rockit** — The Rockit compiler (self-hosted)
+          - **fuel** — The Rockit package manager
+          - **stdlib** — Standard library (22 modules)
+          - **rockit_runtime.o** — Prebuilt runtime
+
+          ### Platforms
+
+          | Platform | Archive |
+          |----------|---------|
+          | Linux x86_64 | \`rockit-${VERSION}-linux-x86_64.tar.gz\` |
+          | macOS arm64 | \`rockit-${VERSION}-macos-arm64.tar.gz\` |
+          | macOS x86_64 | \`rockit-${VERSION}-macos-x86_64.tar.gz\` |
+          | Windows x86_64 | \`rockit-${VERSION}-windows-x86_64.zip\` |
+
+          ### Install
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/develop/scripts/install.sh | bash
+          \`\`\`
+          NOTES
+          )" \
+            $FILES
+        env:
+          GH_TOKEN: ${{ github.token }}
