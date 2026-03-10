@@ -82,6 +82,18 @@ See [Releases](https://rustygits.com/Dark-Matter/rockit-lang/releases) for downl
 | [fuel](https://rustygits.com/Dark-Matter/fuel) | Package manager |
 | [launchpad](https://github.com/dark-matter-tech/launchpad) | Standard library |
 
+## Uninstall
+
+**macOS / Linux:**
+```bash
+curl -fsSL https://rustygits.com/Dark-Matter/rockit-lang/raw/branch/develop/scripts/uninstall.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+iwr -useb https://rustygits.com/Dark-Matter/rockit-lang/raw/branch/develop/scripts/uninstall.ps1 | iex
+```
+
 ## License
 
 Apache 2.0
