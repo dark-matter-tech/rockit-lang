@@ -28,6 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run integration tests
+        id: tests
         run: bash scripts/test-all.sh
         env:
           GIT_HOST: https://github.com
@@ -42,3 +43,43 @@ jobs:
             /tmp/stage2.rokb
             /tmp/stage3.rokb
           retention-days: 90
+
+      - name: Report status to triggering repo
+        if: always() && github.event_name == 'repository_dispatch'
+        run: |
+          REPO="${{ github.event.client_payload.repo }}"
+          REF="${{ github.event.client_payload.ref }}"
+          if [ -z "$REPO" ] || [ -z "$REF" ]; then
+            echo "No repo/ref in payload — skipping status callback"
+            exit 0
+          fi
+
+          # Get the HEAD SHA of the triggering branch
+          SHA=$(curl -s \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_PAT}" \
+            "https://api.github.com/repos/dark-matter-tech/${REPO}/commits/${REF}" \
+            | grep -m1 '"sha"' | cut -d'"' -f4)
+
+          if [ -z "$SHA" ]; then
+            echo "Could not resolve SHA for ${REPO}@${REF}"
+            exit 0
+          fi
+
+          if [ "${{ steps.tests.outcome }}" = "success" ]; then
+            STATE="success"
+            DESC="All integration tests passed"
+          else
+            STATE="failure"
+            DESC="Integration tests failed — check run log"
+          fi
+
+          curl -s -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_PAT}" \
+            "https://api.github.com/repos/dark-matter-tech/${REPO}/statuses/${SHA}" \
+            -d "{\"state\":\"${STATE}\",\"target_url\":\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\",\"description\":\"${DESC}\",\"context\":\"integration / full-stack\"}"
+
+          echo "Posted ${STATE} status to ${REPO}@${SHA}"
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
