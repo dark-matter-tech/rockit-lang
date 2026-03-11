@@ -207,15 +207,19 @@ jobs:
         with:
           path: artifacts/
 
-      - name: Set version
+      - name: Detect version from artifacts
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
-            echo "TAG=v${{ inputs.version }}" >> "$GITHUB_ENV"
+          TARBALL=$(ls artifacts/rockit-linux-x86_64/rockit-*-linux-x86_64.tar.gz 2>/dev/null | head -1)
+          if [ -n "$TARBALL" ]; then
+            VERSION=$(echo "$TARBALL" | sed 's/.*rockit-\(.*\)-linux-x86_64.tar.gz/\1/')
+          elif [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
           else
-            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            VERSION="0.3.0"
           fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
+          echo "Detected version: ${VERSION}"
 
       - name: List artifacts
         run: find artifacts/ -type f | sort
@@ -229,33 +233,36 @@ jobs:
             done
           done
 
+          # Delete existing release if present
+          gh release delete "${TAG}" --repo "${GITHUB_REPOSITORY}" --yes 2>/dev/null || true
+
           gh release create "${TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Rockit ${TAG}" \
-            --notes "$(cat <<NOTES
+            --notes "$(cat <<'NOTES'
           ## Rockit ${TAG}
 
           ### What's Included
 
           - **rockit** — The Rockit compiler (self-hosted)
           - **fuel** — The Rockit package manager
-          - **stdlib** — Standard library (22 modules)
+          - **stdlib** — Standard library (15 modules)
           - **rockit_runtime.o** — Prebuilt runtime
 
           ### Platforms
 
           | Platform | Archive |
           |----------|---------|
-          | Linux x86_64 | \`rockit-${VERSION}-linux-x86_64.tar.gz\` |
-          | macOS arm64 | \`rockit-${VERSION}-macos-arm64.tar.gz\` |
-          | macOS x86_64 | \`rockit-${VERSION}-macos-x86_64.tar.gz\` |
-          | Windows x86_64 | \`rockit-${VERSION}-windows-x86_64.zip\` |
+          | Linux x86_64 | `rockit-linux-x86_64.tar.gz` |
+          | macOS arm64 | `rockit-macos-arm64.tar.gz` |
+          | macOS x86_64 | `rockit-macos-x86_64.tar.gz` |
+          | Windows x86_64 | `rockit-windows-x86_64.zip` |
 
           ### Install
 
-          \`\`\`bash
+          ```bash
           curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/develop/scripts/install.sh | bash
-          \`\`\`
+          ```
           NOTES
           )" \
             $FILES
