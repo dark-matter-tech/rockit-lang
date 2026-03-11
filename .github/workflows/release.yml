@@ -126,9 +126,18 @@ jobs:
 
       - name: Determine version
         run: |
-          VERSION=$(/tmp/compiler/src/command version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
+          DETECTED=$(/tmp/compiler/src/command version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+          if [ -n "$DETECTED" ]; then
+            echo "VERSION=${DETECTED}" >> "$GITHUB_ENV"
+            echo "TAG=v${DETECTED}" >> "$GITHUB_ENV"
+            echo "Detected version: ${DETECTED}"
+          elif [ "$VERSION" = "staging" ] || [ -z "$VERSION" ]; then
+            echo "VERSION=0.3.0" >> "$GITHUB_ENV"
+            echo "TAG=v0.3.0" >> "$GITHUB_ENV"
+            echo "Using default version: 0.3.0"
+          else
+            echo "Using ref version: ${VERSION}"
+          fi
         shell: bash
 
       - name: Build runtime
