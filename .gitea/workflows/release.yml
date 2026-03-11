@@ -73,7 +73,7 @@ jobs:
           echo "machine ${GITHUB_SERVER_URL#https://} login x-access-token password ${GITEA_TOKEN}" > ~/.netrc
           chmod 600 ~/.netrc
           git clone --depth 1 --branch develop \
-            "${GITHUB_SERVER_URL}/Dark-Matter/fuel.git" /tmp/fuel
+            "${GITHUB_SERVER_URL}/Dark-Matter/rockit-fuel.git" /tmp/fuel
           /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
             -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o
         env:
@@ -205,3 +205,23 @@ jobs:
           fi
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Build and push Docker toolchain image
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        run: |
+          STAGING="dist/rockit-${VERSION}-linux-x86_64/rockit"
+          mkdir -p rockit-toolchain/bin rockit-toolchain/share/rockit
+          cp "${STAGING}/bin/rockit" rockit-toolchain/bin/
+          cp "${STAGING}/bin/fuel" rockit-toolchain/bin/
+          cp "${STAGING}/share/rockit/rockit_runtime.o" rockit-toolchain/share/rockit/
+          cp -r "${STAGING}/share/rockit/stdlib" rockit-toolchain/share/rockit/
+
+          echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+          docker build -f Dockerfile -t "${DOCKERHUB_USERNAME}/rockit-toolchain:${TAG}" \
+                                     -t "${DOCKERHUB_USERNAME}/rockit-toolchain:latest" .
+          docker push "${DOCKERHUB_USERNAME}/rockit-toolchain:${TAG}"
+          docker push "${DOCKERHUB_USERNAME}/rockit-toolchain:latest"
+          echo "Pushed rockit-toolchain:${TAG} and :latest to Docker Hub"
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

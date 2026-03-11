@@ -112,7 +112,7 @@ jobs:
       - name: Clone and build Stage 0
         run: |
           git clone --depth 1 --branch develop \
-            https://github.com/dark-matter-tech/rockit-lang-bootstrap-compiler.git /tmp/booster
+            https://github.com/dark-matter-tech/rockit-booster.git /tmp/booster
           cd /tmp/booster && swift build -c release
         shell: bash
 
@@ -137,7 +137,7 @@ jobs:
       - name: Clone and build Fuel
         run: |
           git clone --depth 1 --branch develop \
-            https://github.com/dark-matter-tech/fuel.git /tmp/fuel || true
+            https://github.com/dark-matter-tech/rockit-fuel.git /tmp/fuel || true
           if [ -d /tmp/fuel ]; then
             /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
               -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o \
@@ -251,3 +251,48 @@ jobs:
             $FILES
         env:
           GH_TOKEN: ${{ github.token }}
+
+  push-docker:
+    name: Push Docker toolchain image
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rockit-linux-x86_64
+          path: artifacts/
+
+      - name: Set version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+            echo "TAG=v${{ inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Prepare Docker context
+        run: |
+          tar -xzf artifacts/rockit-${VERSION}-linux-x86_64.tar.gz -C artifacts/
+          mkdir -p rockit-toolchain/bin rockit-toolchain/share/rockit
+          cp artifacts/rockit-${VERSION}-linux-x86_64/rockit/bin/* rockit-toolchain/bin/
+          cp artifacts/rockit-${VERSION}-linux-x86_64/rockit/share/rockit/rockit_runtime.o rockit-toolchain/share/rockit/
+          cp -r artifacts/rockit-${VERSION}-linux-x86_64/rockit/share/rockit/stdlib rockit-toolchain/share/rockit/
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        run: |
+          docker build -f Dockerfile -t ${{ secrets.DOCKERHUB_USERNAME }}/rockit-toolchain:${TAG} \
+                                     -t ${{ secrets.DOCKERHUB_USERNAME }}/rockit-toolchain:latest .
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/rockit-toolchain:${TAG}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/rockit-toolchain:latest
