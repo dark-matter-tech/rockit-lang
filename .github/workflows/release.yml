@@ -239,7 +239,7 @@ jobs:
           gh release create "${TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Rockit ${TAG}" \
-            --notes "$(cat <<'NOTES'
+            --notes "$(cat <<NOTES
           ## Rockit ${TAG}
 
           ### What's Included
@@ -253,16 +253,16 @@ jobs:
 
           | Platform | Archive |
           |----------|---------|
-          | Linux x86_64 | `rockit-linux-x86_64.tar.gz` |
-          | macOS arm64 | `rockit-macos-arm64.tar.gz` |
-          | macOS x86_64 | `rockit-macos-x86_64.tar.gz` |
-          | Windows x86_64 | `rockit-windows-x86_64.zip` |
+          | Linux x86_64 | \`rockit-${VERSION}-linux-x86_64.tar.gz\` |
+          | macOS arm64 | \`rockit-${VERSION}-macos-arm64.tar.gz\` |
+          | macOS x86_64 | \`rockit-${VERSION}-macos-x86_64.tar.gz\` |
+          | Windows x86_64 | \`rockit-${VERSION}-windows-x86_64.zip\` |
 
           ### Install
 
-          ```bash
+          \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/develop/scripts/install.sh | bash
-          ```
+          \`\`\`
           NOTES
           )" \
             $FILES
