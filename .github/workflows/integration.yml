@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
-            git clang-15 curl libssl-dev pkg-config
+            git clang-15 curl libssl-dev pkg-config jq
           ln -sf /usr/bin/clang-15 /usr/bin/clang
           apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -42,6 +42,7 @@ jobs:
           path: |
             /tmp/stage2.rokb
             /tmp/stage3.rokb
+            /tmp/integration-results.json
           retention-days: 90
 
       - name: Report status to triggering repo
@@ -54,12 +55,11 @@ jobs:
             exit 0
           fi
 
-          # Get the HEAD SHA of the triggering branch
           SHA=$(curl -s \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_PAT}" \
             "https://api.github.com/repos/dark-matter-tech/${REPO}/commits/${REF}" \
-            | grep -m1 '"sha"' | cut -d'"' -f4)
+            | jq -r '.sha // empty')
 
           if [ -z "$SHA" ]; then
             echo "Could not resolve SHA for ${REPO}@${REF}"
@@ -81,5 +81,157 @@ jobs:
             -d "{\"state\":\"${STATE}\",\"target_url\":\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\",\"description\":\"${DESC}\",\"context\":\"integration / full-stack\"}"
 
           echo "Posted ${STATE} status to ${REPO}@${SHA}"
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Create or update failure issues
+        if: always() && steps.tests.outcome == 'failure'
+        run: |
+          RESULTS="/tmp/integration-results.json"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          API="https://api.github.com"
+          REPO="dark-matter-tech/rockit-lang"
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Determine trigger context
+          case "${{ github.event_name }}" in
+            repository_dispatch)
+              TRIGGER="dispatch from \`${{ github.event.client_payload.repo }}\`@\`${{ github.event.client_payload.ref }}\`"
+              ;;
+            schedule) TRIGGER="nightly cron" ;;
+            *)        TRIGGER="manual" ;;
+          esac
+
+          # Ensure labels exist (idempotent)
+          for label in integration-failure automated; do
+            curl -s -X POST -H "Authorization: Bearer ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "$API/repos/$REPO/labels" \
+              -d "{\"name\":\"${label}\",\"color\":\"d73a4a\"}" > /dev/null 2>&1 || true
+          done
+
+          # If results JSON doesn't exist, create a minimal one
+          if [ ! -f "$RESULTS" ]; then
+            echo '{"suites":[],"manifest":{}}' > "$RESULTS"
+          fi
+
+          # Build manifest block for issue body
+          MANIFEST=$(jq -r '
+            "| Component | Value |\n|-----------|-------|\n" +
+            "| swift | \(.manifest.swift // "N/A") |\n" +
+            "| clang | \(.manifest.clang // "N/A") |\n" +
+            "| triple | \(.manifest.triple // "N/A") |\n" +
+            "| booster | \(.manifest.booster // "N/A") |\n" +
+            "| compiler | \(.manifest.compiler // "N/A") |\n" +
+            "| fuel | \(.manifest.fuel // "N/A") |\n" +
+            "| stdlib | \(.manifest.stdlib // "N/A") |\n" +
+            "| probe | \(.manifest.probe // "N/A") |"
+          ' "$RESULTS")
+
+          # Process each failed suite
+          jq -c '.suites[] | select(.status == "FAIL")' "$RESULTS" | while read -r suite; do
+            SUITE_NAME=$(echo "$suite" | jq -r '.name')
+            SUITE_ERROR=$(echo "$suite" | jq -r '.error // "No details captured"')
+            SAFE_NAME=$(echo "$SUITE_NAME" | sed 's/[^a-zA-Z0-9_-]//g')
+
+            # Ensure suite label exists
+            curl -s -X POST -H "Authorization: Bearer ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "$API/repos/$REPO/labels" \
+              -d "{\"name\":\"suite:${SAFE_NAME}\",\"color\":\"e99695\"}" > /dev/null 2>&1 || true
+
+            # Search for existing open issue with these labels
+            EXISTING=$(curl -s -H "Authorization: Bearer ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "$API/repos/$REPO/issues?labels=integration-failure,suite:${SAFE_NAME}&state=open&per_page=1" \
+              | jq -r '.[0].number // empty')
+
+            if [ -n "$EXISTING" ]; then
+              # Add comment to existing issue
+              COMMENT_BODY=$(cat <<ENDCOMMENT
+### Failure recurrence — ${NOW}
+
+**Trigger:** ${TRIGGER}
+**Run:** [#${GITHUB_RUN_NUMBER}](${RUN_URL})
+
+\`\`\`
+${SUITE_ERROR}
+\`\`\`
+
+Build manifest: booster@$(jq -r '.manifest.booster' "$RESULTS") compiler@$(jq -r '.manifest.compiler' "$RESULTS") fuel@$(jq -r '.manifest.fuel' "$RESULTS") stdlib@$(jq -r '.manifest.stdlib' "$RESULTS")
+ENDCOMMENT
+              )
+
+              jq -n --arg body "$COMMENT_BODY" '{"body": $body}' | \
+                curl -s -X POST -H "Authorization: Bearer ${GH_PAT}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "$API/repos/$REPO/issues/${EXISTING}/comments" \
+                  -d @- > /dev/null
+
+              echo "Updated issue #${EXISTING} for suite ${SUITE_NAME}"
+            else
+              # Create new issue
+              ISSUE_BODY=$(cat <<ENDISSUE
+## Integration Test Failure: \`${SUITE_NAME}\`
+
+**Trigger:** ${TRIGGER}
+**Run:** [#${GITHUB_RUN_NUMBER}](${RUN_URL})
+**Date:** ${NOW}
+
+### Error Details
+
+\`\`\`
+${SUITE_ERROR}
+\`\`\`
+
+### Build Manifest
+
+${MANIFEST}
+
+---
+*Automatically created by the integration test workflow.*
+ENDISSUE
+              )
+
+              jq -n \
+                --arg title "Integration failure: ${SUITE_NAME}" \
+                --arg body "$ISSUE_BODY" \
+                --argjson labels "[\"integration-failure\",\"suite:${SAFE_NAME}\",\"automated\"]" \
+                '{title: $title, body: $body, labels: $labels}' | \
+                curl -s -X POST -H "Authorization: Bearer ${GH_PAT}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "$API/repos/$REPO/issues" \
+                  -d @- > /dev/null
+
+              echo "Created issue for suite ${SUITE_NAME}"
+            fi
+          done
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+      - name: Mark recovered suites
+        if: always() && steps.tests.outcome == 'success'
+        run: |
+          API="https://api.github.com"
+          REPO="dark-matter-tech/rockit-lang"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          for suite in compiler-integration bootstrap-verification fuel-cli stdlib-modules; do
+            EXISTING=$(curl -s -H "Authorization: Bearer ${GH_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              "$API/repos/$REPO/issues?labels=integration-failure,suite:${suite}&state=open&per_page=1" \
+              | jq -r '.[0].number // empty')
+
+            if [ -n "$EXISTING" ]; then
+              jq -n --arg body "Suite \`${suite}\` **passed** in run [#${GITHUB_RUN_NUMBER}](${RUN_URL}). This issue may be resolved." \
+                '{"body": $body}' | \
+                curl -s -X POST -H "Authorization: Bearer ${GH_PAT}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "$API/repos/$REPO/issues/${EXISTING}/comments" \
+                  -d @- > /dev/null
+
+              echo "Commented recovery on issue #${EXISTING} for suite ${suite}"
+            fi
+          done
         env:
           GH_PAT: ${{ secrets.GH_PAT }}

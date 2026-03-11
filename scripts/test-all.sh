@@ -34,12 +34,15 @@ if [ -z "$TRIPLE" ]; then
   esac
 fi
 
+RESULTS_JSON="${RESULTS_JSON:-/tmp/integration-results.json}"
+
 # ── State ─────────────────────────────────────────────────────
 
 PASS=0
 FAIL=0
 SKIP=0
 RESULTS=()
+SUITE_ERRORS=()
 START_TIME=$(date +%s)
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -56,8 +59,9 @@ trap cleanup EXIT
 log() { echo "==> $*"; }
 
 record() {
-  local name="$1" status="$2"
+  local name="$1" status="$2" error="${3:-}"
   RESULTS+=("$status $name")
+  SUITE_ERRORS+=("$error")
   case "$status" in
     PASS) PASS=$((PASS + 1)) ;;
     FAIL) FAIL=$((FAIL + 1)) ;;
@@ -123,6 +127,7 @@ STDLIB="$WORK/stdlib"
 log "Running compiler integration tests"
 cd "$WORK/compiler"
 TEST_PASS=0; TEST_FAIL=0; TEST_TOTAL=0
+COMPILE_ERRORS=""
 for f in examples/test_*.rok; do
   [ -f "$f" ] || continue
   name=$(basename "$f" .rok)
@@ -135,19 +140,21 @@ for f in examples/test_*.rok; do
     TEST_PASS=$((TEST_PASS + 1))
   else
     echo "  FAIL: $name"
+    COMPILE_ERRORS="${COMPILE_ERRORS}FAIL: ${name}\n"
     TEST_FAIL=$((TEST_FAIL + 1))
   fi
 done
 echo "  Compiler tests: $TEST_PASS/$TEST_TOTAL passed"
 if [ "$TEST_FAIL" -eq 0 ]; then
-  record "compiler-integration ($TEST_TOTAL tests)" PASS
+  record "compiler-integration" PASS
 else
-  record "compiler-integration ($TEST_FAIL/$TEST_TOTAL failed)" FAIL
+  record "compiler-integration" FAIL "${TEST_FAIL}/${TEST_TOTAL} failed to compile: ${COMPILE_ERRORS}"
 fi
 
 # 3b: Bootstrap verification
 log "Running bootstrap verification"
 cd "$WORK/compiler"
+BOOTSTRAP_ERROR=""
 if "$COMPILER" compile src/command.rok -o /tmp/stage2.rokb 2>/dev/null; then
   "$COMPILER" build-native src/command.rok -o /tmp/stage2 \
     --runtime-path "$RUNTIME" --target-triple "$TRIPLE" 2>/dev/null
@@ -156,16 +163,19 @@ if "$COMPILER" compile src/command.rok -o /tmp/stage2.rokb 2>/dev/null; then
       echo "  Bootstrap verified: Stage 2 == Stage 3"
       record "bootstrap-verification" PASS
     else
+      BOOTSTRAP_ERROR="Bytecode mismatch: Stage 2 != Stage 3"
       echo "  Bootstrap FAILED: bytecode mismatch"
-      record "bootstrap-verification" FAIL
+      record "bootstrap-verification" FAIL "$BOOTSTRAP_ERROR"
     fi
   else
+    BOOTSTRAP_ERROR="Stage 2 binary could not compile its own source"
     echo "  Bootstrap FAILED: Stage 2 could not compile"
-    record "bootstrap-verification" FAIL
+    record "bootstrap-verification" FAIL "$BOOTSTRAP_ERROR"
   fi
 else
+  BOOTSTRAP_ERROR="Stage 1 could not compile bytecode"
   echo "  Bootstrap FAILED: Stage 1 could not compile bytecode"
-  record "bootstrap-verification" FAIL
+  record "bootstrap-verification" FAIL "$BOOTSTRAP_ERROR"
 fi
 rm -f /tmp/stage2 /tmp/stage2.rokb /tmp/stage3.rokb
 
@@ -173,45 +183,59 @@ rm -f /tmp/stage2 /tmp/stage2.rokb /tmp/stage3.rokb
 log "Running fuel CLI tests"
 if [ -x "$FUEL" ]; then
   FUEL_PASS=0; FUEL_FAIL=0
+  FUEL_ERRORS=""
 
   # version
-  if "$FUEL" version 2>&1 | grep -q "[0-9]\.[0-9]"; then
+  FUEL_OUT=$("$FUEL" version 2>&1 || true)
+  if echo "$FUEL_OUT" | grep -q "[0-9]\.[0-9]"; then
     FUEL_PASS=$((FUEL_PASS + 1))
   else
-    echo "  FAIL: fuel version"; FUEL_FAIL=$((FUEL_FAIL + 1))
+    echo "  FAIL: fuel version"
+    FUEL_ERRORS="${FUEL_ERRORS}fuel version: ${FUEL_OUT}\n"
+    FUEL_FAIL=$((FUEL_FAIL + 1))
   fi
 
   # help
-  if "$FUEL" help 2>&1 | grep -q "USAGE:"; then
+  FUEL_OUT=$("$FUEL" help 2>&1 || true)
+  if echo "$FUEL_OUT" | grep -q "USAGE:"; then
     FUEL_PASS=$((FUEL_PASS + 1))
   else
-    echo "  FAIL: fuel help"; FUEL_FAIL=$((FUEL_FAIL + 1))
+    echo "  FAIL: fuel help"
+    FUEL_ERRORS="${FUEL_ERRORS}fuel help: ${FUEL_OUT}\n"
+    FUEL_FAIL=$((FUEL_FAIL + 1))
   fi
 
   # init
   rm -rf /tmp/test-integration-project
-  if "$FUEL" init /tmp/test-integration-project 2>/dev/null && \
-     [ -f /tmp/test-integration-project/Fuel.toml ]; then
+  FUEL_OUT=$("$FUEL" init /tmp/test-integration-project 2>&1 || true)
+  if [ -f /tmp/test-integration-project/Fuel.toml ]; then
     FUEL_PASS=$((FUEL_PASS + 1))
   else
-    echo "  FAIL: fuel init"; FUEL_FAIL=$((FUEL_FAIL + 1))
+    echo "  FAIL: fuel init"
+    FUEL_ERRORS="${FUEL_ERRORS}fuel init: ${FUEL_OUT}\n"
+    FUEL_FAIL=$((FUEL_FAIL + 1))
   fi
 
   # build
   if [ -d /tmp/test-integration-project ]; then
     cd /tmp/test-integration-project
-    if "$FUEL" build --compiler-path "$COMPILER" --runtime-path "$RUNTIME" 2>/dev/null && \
-       [ -f build/test-integration-project ]; then
+    FUEL_OUT=$("$FUEL" build --compiler-path "$COMPILER" --runtime-path "$RUNTIME" 2>&1 || true)
+    if [ -f build/test-integration-project ]; then
       FUEL_PASS=$((FUEL_PASS + 1))
     else
-      echo "  FAIL: fuel build"; FUEL_FAIL=$((FUEL_FAIL + 1))
+      echo "  FAIL: fuel build"
+      FUEL_ERRORS="${FUEL_ERRORS}fuel build: ${FUEL_OUT}\n"
+      FUEL_FAIL=$((FUEL_FAIL + 1))
     fi
 
     # clean
-    if "$FUEL" clean 2>/dev/null && [ ! -d build ]; then
+    FUEL_OUT=$("$FUEL" clean 2>&1 || true)
+    if [ ! -d build ]; then
       FUEL_PASS=$((FUEL_PASS + 1))
     else
-      echo "  FAIL: fuel clean"; FUEL_FAIL=$((FUEL_FAIL + 1))
+      echo "  FAIL: fuel clean"
+      FUEL_ERRORS="${FUEL_ERRORS}fuel clean: ${FUEL_OUT}\n"
+      FUEL_FAIL=$((FUEL_FAIL + 1))
     fi
     cd "$WORK"
   fi
@@ -221,18 +245,19 @@ if [ -x "$FUEL" ]; then
   FUEL_TOTAL=$((FUEL_PASS + FUEL_FAIL))
   echo "  Fuel tests: $FUEL_PASS/$FUEL_TOTAL passed"
   if [ "$FUEL_FAIL" -eq 0 ]; then
-    record "fuel-cli ($FUEL_TOTAL tests)" PASS
+    record "fuel-cli" PASS
   else
-    record "fuel-cli ($FUEL_FAIL/$FUEL_TOTAL failed)" FAIL
+    record "fuel-cli" FAIL "${FUEL_FAIL}/${FUEL_TOTAL} commands failed: ${FUEL_ERRORS}"
   fi
 else
   echo "  Fuel binary not available — skipping"
-  record "fuel-cli" SKIP
+  record "fuel-cli" SKIP "Binary not available"
 fi
 
 # 3d: Stdlib module presence
 log "Validating stdlib modules"
 STDLIB_PASS=0; STDLIB_FAIL=0
+STDLIB_ERRORS=""
 MODULES=(
   "rockit/core/collections.rok"
   "rockit/core/math.rok"
@@ -255,14 +280,15 @@ for mod in "${MODULES[@]}"; do
     STDLIB_PASS=$((STDLIB_PASS + 1))
   else
     echo "  MISSING: $mod"
+    STDLIB_ERRORS="${STDLIB_ERRORS}MISSING: ${mod}\n"
     STDLIB_FAIL=$((STDLIB_FAIL + 1))
   fi
 done
 echo "  Stdlib modules: $STDLIB_PASS/${#MODULES[@]} present"
 if [ "$STDLIB_FAIL" -eq 0 ]; then
-  record "stdlib-modules (${#MODULES[@]} modules)" PASS
+  record "stdlib-modules" PASS
 else
-  record "stdlib-modules ($STDLIB_FAIL missing)" FAIL
+  record "stdlib-modules" FAIL "${STDLIB_FAIL} missing: ${STDLIB_ERRORS}"
 fi
 
 # ── Phase 4: Report ───────────────────────────────────────────
@@ -291,17 +317,62 @@ echo "  Total: $PASS passed, $FAIL failed, $SKIP skipped (${ELAPSED}s)"
 echo ""
 
 # Build manifest (tool versions + SHAs)
+BOOSTER_SHA=$(cd "$WORK/booster" && git rev-parse --short HEAD)
+COMPILER_SHA=$(cd "$WORK/compiler" && git rev-parse --short HEAD)
+FUEL_SHA=$(cd "$WORK/fuel" && git rev-parse --short HEAD)
+STDLIB_SHA=$(cd "$WORK/stdlib" && git rev-parse --short HEAD)
+PROBE_SHA=$(cd "$WORK/probe" && git rev-parse --short HEAD)
+SWIFT_VER=$(swift --version 2>&1 | head -1 || echo 'N/A')
+CLANG_VER=$(clang --version 2>&1 | head -1 || echo 'N/A')
+
 echo "  Build manifest:"
-echo "    swift:    $(swift --version 2>&1 | head -1 || echo 'N/A')"
-echo "    clang:    $(clang --version 2>&1 | head -1 || echo 'N/A')"
+echo "    swift:    $SWIFT_VER"
+echo "    clang:    $CLANG_VER"
 echo "    compiler: $($COMPILER version 2>&1 || echo 'N/A')"
 echo "    triple:   $TRIPLE"
-echo "    booster:  $(cd "$WORK/booster" && git rev-parse --short HEAD)"
-echo "    compiler: $(cd "$WORK/compiler" && git rev-parse --short HEAD)"
-echo "    fuel:     $(cd "$WORK/fuel" && git rev-parse --short HEAD)"
-echo "    stdlib:   $(cd "$WORK/stdlib" && git rev-parse --short HEAD)"
-echo "    probe:    $(cd "$WORK/probe" && git rev-parse --short HEAD)"
+echo "    booster:  $BOOSTER_SHA"
+echo "    compiler: $COMPILER_SHA"
+echo "    fuel:     $FUEL_SHA"
+echo "    stdlib:   $STDLIB_SHA"
+echo "    probe:    $PROBE_SHA"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ── Write JSON results ────────────────────────────────────────
+
+SUITES_JSON="["
+for i in "${!RESULTS[@]}"; do
+  r="${RESULTS[$i]}"
+  status="${r%% *}"
+  name="${r#* }"
+  error="${SUITE_ERRORS[$i]:-}"
+  # Escape special chars for JSON
+  error=$(printf '%s' "$error" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' ' ')
+  [ "$i" -gt 0 ] && SUITES_JSON="${SUITES_JSON},"
+  SUITES_JSON="${SUITES_JSON}{\"name\":\"${name}\",\"status\":\"${status}\",\"error\":\"${error}\"}"
+done
+SUITES_JSON="${SUITES_JSON}]"
+
+cat > "$RESULTS_JSON" <<ENDJSON
+{
+  "pass": $PASS,
+  "fail": $FAIL,
+  "skip": $SKIP,
+  "elapsed": $ELAPSED,
+  "suites": $SUITES_JSON,
+  "manifest": {
+    "swift": "$SWIFT_VER",
+    "clang": "$CLANG_VER",
+    "triple": "$TRIPLE",
+    "booster": "$BOOSTER_SHA",
+    "compiler": "$COMPILER_SHA",
+    "fuel": "$FUEL_SHA",
+    "stdlib": "$STDLIB_SHA",
+    "probe": "$PROBE_SHA"
+  }
+}
+ENDJSON
+
+echo "Results written to $RESULTS_JSON"
 
 [ "$FAIL" -eq 0 ] || exit 1
