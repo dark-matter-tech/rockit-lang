@@ -42,7 +42,7 @@ jobs:
           git clone --depth 1 --recurse-submodules --branch staging \
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-compiler.git" /tmp/compiler
         env:
-          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.GITEAPAT }}
 
       - name: Clone and build Stage 0 (bootstrap compiler)
         run: |
@@ -50,7 +50,7 @@ jobs:
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-booster.git" /tmp/booster
           cd /tmp/booster && swift build -c release
         env:
-          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.GITEAPAT }}
 
       - name: Build Stage 1
         run: |
@@ -77,7 +77,7 @@ jobs:
           /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
             -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o
         env:
-          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.GITEAPAT }}
 
       - name: Bootstrap verification
         run: |
@@ -184,7 +184,7 @@ jobs:
 
           echo "Release ${TAG} published"
         env:
-          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.GITEAPAT }}
 
       - name: Mirror release to GitHub
         if: env.GH_PAT != ''
@@ -204,7 +204,7 @@ jobs:
             echo "Mirrored release ${TAG} to GitHub"
           fi
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
 
       - name: Build and push Docker toolchain image
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
