@@ -35,25 +35,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ gitea.token }}
 
-      - name: Configure cross-repo auth
-        run: |
-          TOKEN="${GITEAPAT:-$GITHUB_TOKEN}"
-          echo "machine ${GITHUB_SERVER_URL#https://} login x-access-token password ${TOKEN}" > ~/.netrc
-          chmod 600 ~/.netrc
-        env:
-          GITEAPAT: ${{ secrets.GITEAPAT }}
-          GITHUB_TOKEN: ${{ gitea.token }}
-
       - name: Clone compiler
         run: |
-          git clone --depth 1 --recurse-submodules --branch staging \
+          git -c http.extraHeader="Authorization: token ${GITEAPAT}" \
+            clone --depth 1 --recurse-submodules --branch staging \
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-compiler.git" /tmp/compiler
+        env:
+          GITEAPAT: ${{ secrets.GITEAPAT }}
 
       - name: Clone and build Stage 0 (bootstrap compiler)
         run: |
-          git clone --depth 1 --branch develop \
+          git -c http.extraHeader="Authorization: token ${GITEAPAT}" \
+            clone --depth 1 --branch develop \
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-booster.git" /tmp/booster
           cd /tmp/booster && swift build -c release
+        env:
+          GITEAPAT: ${{ secrets.GITEAPAT }}
 
       - name: Build Stage 1
         run: |
@@ -73,10 +70,13 @@ jobs:
 
       - name: Build Fuel
         run: |
-          git clone --depth 1 --branch develop \
+          git -c http.extraHeader="Authorization: token ${GITEAPAT}" \
+            clone --depth 1 --branch develop \
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-fuel.git" /tmp/fuel
           /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
             -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o
+        env:
+          GITEAPAT: ${{ secrets.GITEAPAT }}
 
       - name: Bootstrap verification
         run: |
