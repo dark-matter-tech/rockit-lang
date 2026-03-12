@@ -35,6 +35,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ gitea.token }}
 
+      - name: Debug secrets
+        run: |
+          echo "GH_MIRROR_PAT length: ${#GH_MIRROR_PAT}"
+          echo "GITHUB_SERVER_URL: ${GITHUB_SERVER_URL}"
+        env:
+          GH_MIRROR_PAT: ${{ secrets.GH_MIRROR_PAT }}
+
       - name: Clone compiler
         run: |
           echo "machine ${GITHUB_SERVER_URL#https://} login x-access-token password ${GH_MIRROR_PAT}" > ~/.netrc
