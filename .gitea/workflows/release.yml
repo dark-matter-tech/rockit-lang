@@ -37,8 +37,12 @@ jobs:
 
       - name: Clone compiler
         run: |
+          echo "machine ${GITHUB_SERVER_URL#https://} login x-access-token password ${GH_MIRROR_PAT}" > ~/.netrc
+          chmod 600 ~/.netrc
           git clone --depth 1 --recurse-submodules --branch staging \
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-compiler.git" /tmp/compiler
+        env:
+          GH_MIRROR_PAT: ${{ secrets.GH_MIRROR_PAT }}
 
       - name: Clone and build Stage 0 (bootstrap compiler)
         run: |
@@ -174,7 +178,7 @@ jobs:
 
           echo "Release ${TAG} published"
         env:
-          GITEA_TOKEN: ${{ gitea.token }}
+          GITEA_TOKEN: ${{ secrets.GH_MIRROR_PAT }}
 
       - name: Mirror release to GitHub
         if: env.GH_PAT != ''

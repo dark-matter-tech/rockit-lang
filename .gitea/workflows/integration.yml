@@ -36,4 +36,4 @@ jobs:
         env:
           GIT_HOST: https://rustygits.com
           GIT_ORG: Dark-Matter
-          GIT_TOKEN: ${{ gitea.token }}
+          GIT_TOKEN: ${{ secrets.GH_MIRROR_PAT }}
