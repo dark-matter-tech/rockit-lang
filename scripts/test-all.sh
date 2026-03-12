@@ -69,20 +69,24 @@ record() {
   esac
 }
 
+setup_netrc() {
+  if [ -n "${GIT_TOKEN:-}" ]; then
+    local host="${GIT_HOST#https://}"
+    echo "machine ${host} login x-access-token password ${GIT_TOKEN}" > ~/.netrc
+    chmod 600 ~/.netrc
+  fi
+}
+
 clone_repo() {
   local name="$1" ref="$2" dest="$3"
   log "Cloning $name ($ref)"
-  if [ -n "${GIT_TOKEN:-}" ]; then
-    git -c http.extraHeader="Authorization: token ${GIT_TOKEN}" \
-      clone --depth 1 --branch "$ref" "$GIT_HOST/$GIT_ORG/$name.git" "$dest" 2>/dev/null
-  else
-    git clone --depth 1 --branch "$ref" "$GIT_HOST/$GIT_ORG/$name.git" "$dest" 2>/dev/null
-  fi
+  git clone --depth 1 --branch "$ref" "$GIT_HOST/$GIT_ORG/$name.git" "$dest" 2>/dev/null
 }
 
 # ── Phase 1: Clone ────────────────────────────────────────────
 
 log "Phase 1: Clone all repos into $WORK"
+setup_netrc
 
 clone_repo "rockit-booster"  "$BOOSTER_REF"  "$WORK/booster"
 clone_repo "rockit-compiler" "$COMPILER_REF" "$WORK/compiler"
