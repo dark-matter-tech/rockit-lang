@@ -37,20 +37,20 @@ jobs:
 
       - name: Clone compiler
         run: |
-          git -c http.extraHeader="Authorization: token ${GITEAPAT}" \
+          git -c http.extraHeader="Authorization: token ${GH_MIRROR_PAT}" \
             clone --depth 1 --recurse-submodules --branch staging \
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-compiler.git" /tmp/compiler
         env:
-          GITEAPAT: ${{ secrets.GITEAPAT }}
+          GH_MIRROR_PAT: ${{ secrets.GH_MIRROR_PAT }}
 
       - name: Clone and build Stage 0 (bootstrap compiler)
         run: |
-          git -c http.extraHeader="Authorization: token ${GITEAPAT}" \
+          git -c http.extraHeader="Authorization: token ${GH_MIRROR_PAT}" \
             clone --depth 1 --branch develop \
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-booster.git" /tmp/booster
           cd /tmp/booster && swift build -c release
         env:
-          GITEAPAT: ${{ secrets.GITEAPAT }}
+          GH_MIRROR_PAT: ${{ secrets.GH_MIRROR_PAT }}
 
       - name: Build Stage 1
         run: |
@@ -70,13 +70,13 @@ jobs:
 
       - name: Build Fuel
         run: |
-          git -c http.extraHeader="Authorization: token ${GITEAPAT}" \
+          git -c http.extraHeader="Authorization: token ${GH_MIRROR_PAT}" \
             clone --depth 1 --branch develop \
             "${GITHUB_SERVER_URL}/Dark-Matter/rockit-fuel.git" /tmp/fuel
           /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
             -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o
         env:
-          GITEAPAT: ${{ secrets.GITEAPAT }}
+          GH_MIRROR_PAT: ${{ secrets.GH_MIRROR_PAT }}
 
       - name: Bootstrap verification
         run: |
@@ -146,7 +146,7 @@ jobs:
 
           # Check if release already exists
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Authorization: token ${GH_MIRROR_PAT}" \
             "${API}/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")
 
           if [ "$STATUS" = "200" ]; then
@@ -156,13 +156,13 @@ jobs:
 
           # Create tag if needed
           TAG_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Authorization: token ${GH_MIRROR_PAT}" \
             "${API}/repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}")
           if [ "$TAG_STATUS" != "200" ]; then
             SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
             if [ -n "$SHA" ]; then
               curl -s -X POST \
-                -H "Authorization: token ${GITEA_TOKEN}" \
+                -H "Authorization: token ${GH_MIRROR_PAT}" \
                 -H "Content-Type: application/json" \
                 "${API}/repos/${GITHUB_REPOSITORY}/tags" \
                 -d "{\"tag_name\": \"${TAG}\", \"target\": \"${SHA}\"}"
@@ -170,20 +170,20 @@ jobs:
           fi
 
           RELEASE_ID=$(curl -s -X POST \
-            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Authorization: token ${GH_MIRROR_PAT}" \
             -H "Content-Type: application/json" \
             "${API}/repos/${GITHUB_REPOSITORY}/releases" \
             -d "{\"tag_name\": \"${TAG}\", \"name\": \"Rockit ${TAG}\", \"body\": \"Release ${TAG} of the Rockit toolchain.\"}" | jq -r '.id')
 
           curl -s -X POST \
-            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Authorization: token ${GH_MIRROR_PAT}" \
             -H "Content-Type: application/gzip" \
             --data-binary "@dist/${ARCHIVE}" \
             "${API}/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${ARCHIVE}"
 
           echo "Release ${TAG} published"
         env:
-          GITEA_TOKEN: ${{ secrets.GITEAPAT }}
+          GH_MIRROR_PAT: ${{ secrets.GH_MIRROR_PAT }}
 
       - name: Mirror release to GitHub
         if: env.GH_PAT != ''

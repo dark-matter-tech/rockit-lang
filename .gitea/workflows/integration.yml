@@ -34,5 +34,5 @@ jobs:
       - name: Run integration tests
         run: bash scripts/test-all.sh
         env:
-          GIT_HOST: https://x-access-token:${{ secrets.GITEAPAT }}@rustygits.com
+          GIT_HOST: https://x-access-token:${{ secrets.GH_MIRROR_PAT }}@rustygits.com
           GIT_ORG: Dark-Matter
