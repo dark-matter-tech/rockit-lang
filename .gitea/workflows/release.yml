@@ -35,26 +35,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ gitea.token }}
 
-      - name: Debug secrets
-        run: |
-          echo "GH_MIRROR_PAT length: ${#GH_MIRROR_PAT}"
-          echo "GITHUB_SERVER_URL: ${GITHUB_SERVER_URL}"
-        env:
-          GH_MIRROR_PAT: ${{ secrets.GH_MIRROR_PAT }}
-
       - name: Clone compiler
         run: |
-          echo "machine ${GITHUB_SERVER_URL#https://} login x-access-token password ${GH_MIRROR_PAT}" > ~/.netrc
-          chmod 600 ~/.netrc
           git clone --depth 1 --recurse-submodules --branch staging \
-            "${GITHUB_SERVER_URL}/Dark-Matter/rockit-compiler.git" /tmp/compiler
-        env:
-          GH_MIRROR_PAT: ${{ secrets.GH_MIRROR_PAT }}
+            https://github.com/dark-matter-tech/rockit-compiler.git /tmp/compiler
 
       - name: Clone and build Stage 0 (bootstrap compiler)
         run: |
           git clone --depth 1 --branch develop \
-            "${GITHUB_SERVER_URL}/Dark-Matter/rockit-booster.git" /tmp/booster
+            https://github.com/dark-matter-tech/rockit-booster.git /tmp/booster
           cd /tmp/booster && swift build -c release
 
       - name: Build Stage 1
@@ -76,7 +65,7 @@ jobs:
       - name: Build Fuel
         run: |
           git clone --depth 1 --branch develop \
-            "${GITHUB_SERVER_URL}/Dark-Matter/rockit-fuel.git" /tmp/fuel
+            https://github.com/dark-matter-tech/rockit-fuel.git /tmp/fuel
           /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
             -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o
 
@@ -185,44 +174,25 @@ jobs:
 
           echo "Release ${TAG} published"
         env:
-          GITEA_TOKEN: ${{ secrets.GH_MIRROR_PAT }}
+          GITEA_TOKEN: ${{ gitea.token }}
 
       - name: Mirror release to GitHub
-        if: env.GH_PAT != ''
         run: |
           GH_RELEASE_ID=$(curl -s -X POST \
-            -H "Authorization: token ${GH_PAT}" \
+            -H "Authorization: token ${GH_TOKEN}" \
             -H "Content-Type: application/json" \
             "https://api.github.com/repos/dark-matter-tech/rockit-lang/releases" \
             -d "{\"tag_name\": \"${TAG}\", \"name\": \"Rockit ${TAG}\", \"body\": \"Release ${TAG} of the Rockit toolchain.\"}" | jq -r '.id')
 
           if [ -n "$GH_RELEASE_ID" ] && [ "$GH_RELEASE_ID" != "null" ]; then
             curl -s -X POST \
-              -H "Authorization: token ${GH_PAT}" \
+              -H "Authorization: token ${GH_TOKEN}" \
               -H "Content-Type: application/gzip" \
               --data-binary "@dist/${ARCHIVE}" \
               "https://uploads.github.com/repos/dark-matter-tech/rockit-lang/releases/${GH_RELEASE_ID}/assets?name=${ARCHIVE}"
             echo "Mirrored release ${TAG} to GitHub"
+          else
+            echo "GitHub mirror skipped (no token or release creation failed)"
           fi
         env:
-          GH_PAT: ${{ secrets.GH_MIRROR_PAT }}
-
-      - name: Build and push Docker toolchain image
-        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
-        run: |
-          STAGING="dist/rockit-${VERSION}-linux-x86_64/rockit"
-          mkdir -p rockit-toolchain/bin rockit-toolchain/share/rockit
-          cp "${STAGING}/bin/rockit" rockit-toolchain/bin/
-          cp "${STAGING}/bin/fuel" rockit-toolchain/bin/
-          cp "${STAGING}/share/rockit/rockit_runtime.o" rockit-toolchain/share/rockit/
-          cp -r "${STAGING}/share/rockit/stdlib" rockit-toolchain/share/rockit/
-
-          echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
-          docker build -f Dockerfile -t "${DOCKERHUB_USERNAME}/rockit-toolchain:${TAG}" \
-                                     -t "${DOCKERHUB_USERNAME}/rockit-toolchain:latest" .
-          docker push "${DOCKERHUB_USERNAME}/rockit-toolchain:${TAG}"
-          docker push "${DOCKERHUB_USERNAME}/rockit-toolchain:latest"
-          echo "Pushed rockit-toolchain:${TAG} and :latest to Docker Hub"
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_MIRROR_PAT }}
