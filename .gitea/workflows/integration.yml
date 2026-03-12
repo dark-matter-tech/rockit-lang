@@ -32,10 +32,7 @@ jobs:
           GITHUB_TOKEN: ${{ gitea.token }}
 
       - name: Run integration tests
-        run: |
-          mv ~/.netrc ~/.netrc.bak
-          bash scripts/test-all.sh
-          mv ~/.netrc.bak ~/.netrc
+        run: bash scripts/test-all.sh
         env:
-          GIT_HOST: https://rustygits.com
+          GIT_HOST: https://x-access-token:${{ secrets.GITEAPAT }}@rustygits.com
           GIT_ORG: Dark-Matter
