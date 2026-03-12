@@ -72,7 +72,12 @@ record() {
 clone_repo() {
   local name="$1" ref="$2" dest="$3"
   log "Cloning $name ($ref)"
-  git clone --depth 1 --branch "$ref" "$GIT_HOST/$GIT_ORG/$name.git" "$dest" 2>/dev/null
+  if [ -n "${GIT_TOKEN:-}" ]; then
+    git -c http.extraHeader="Authorization: token ${GIT_TOKEN}" \
+      clone --depth 1 --branch "$ref" "$GIT_HOST/$GIT_ORG/$name.git" "$dest" 2>/dev/null
+  else
+    git clone --depth 1 --branch "$ref" "$GIT_HOST/$GIT_ORG/$name.git" "$dest" 2>/dev/null
+  fi
 }
 
 # ── Phase 1: Clone ────────────────────────────────────────────
