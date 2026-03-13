@@ -155,6 +155,13 @@ jobs:
           fi
         shell: bash
 
+      - name: Build LSP
+        run: |
+          git clone --depth 1 --branch develop \
+            https://github.com/dark-matter-tech/rockit-lsp.git /tmp/lsp
+          cd /tmp/lsp && swift build -c release
+        shell: bash
+
       - name: Package archive (Unix)
         if: matrix.archive_ext == 'tar.gz'
         run: |
@@ -166,6 +173,10 @@ jobs:
           if [ -f /tmp/fuel/fuel ]; then
             cp /tmp/fuel/fuel "${STAGING}/bin/fuel"
             chmod +x "${STAGING}/bin/fuel"
+          fi
+          if [ -f /tmp/lsp/.build/release/rockit-lsp ]; then
+            cp /tmp/lsp/.build/release/rockit-lsp "${STAGING}/bin/rockit-lsp"
+            chmod +x "${STAGING}/bin/rockit-lsp"
           fi
           cp /tmp/compiler/runtime/rockit_runtime.o "${STAGING}/share/rockit/"
           cp -r /tmp/compiler/launchpad "${STAGING}/share/rockit/stdlib"
@@ -183,6 +194,7 @@ jobs:
           Copy-Item "/tmp/compiler/src/command.exe" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
           Copy-Item "/tmp/compiler/src/command" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
           if (Test-Path "/tmp/fuel/fuel.exe") { Copy-Item "/tmp/fuel/fuel.exe" "$staging/bin/fuel.exe" }
+          if (Test-Path "/tmp/lsp/.build/release/rockit-lsp.exe") { Copy-Item "/tmp/lsp/.build/release/rockit-lsp.exe" "$staging/bin/rockit-lsp.exe" }
           if (Test-Path "/tmp/compiler/runtime/rockit_runtime.o") {
             Copy-Item "/tmp/compiler/runtime/rockit_runtime.o" "$staging/share/rockit/"
           }

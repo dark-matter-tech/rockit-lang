@@ -70,6 +70,12 @@ jobs:
           /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
             -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o
 
+      - name: Build LSP
+        run: |
+          git clone --depth 1 --branch develop \
+            https://github.com/dark-matter-tech/rockit-lsp.git /tmp/lsp
+          cd /tmp/lsp && swift build -c release
+
       - name: Bootstrap verification
         run: |
           cd /tmp/compiler
@@ -105,13 +111,15 @@ jobs:
           mkdir -p "${STAGING}/bin" "${STAGING}/share/rockit"
           cp /tmp/compiler/src/command "${STAGING}/bin/rockit"
           cp /tmp/fuel/fuel "${STAGING}/bin/fuel"
-          chmod +x "${STAGING}/bin/rockit" "${STAGING}/bin/fuel"
+          cp /tmp/lsp/.build/release/rockit-lsp "${STAGING}/bin/rockit-lsp"
+          chmod +x "${STAGING}/bin/rockit" "${STAGING}/bin/fuel" "${STAGING}/bin/rockit-lsp"
           cp /tmp/compiler/runtime/rockit_runtime.o "${STAGING}/share/rockit/"
           cp -r /tmp/compiler/launchpad "${STAGING}/share/rockit/stdlib"
 
           if [ -n "${GPG_KEY_ID:-}" ]; then
             bash scripts/sign.sh "${STAGING}/bin/rockit" gpg || true
             bash scripts/sign.sh "${STAGING}/bin/fuel" gpg || true
+            bash scripts/sign.sh "${STAGING}/bin/rockit-lsp" gpg || true
           fi
 
           cd "${STAGING}"
