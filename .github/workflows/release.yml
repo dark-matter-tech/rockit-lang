@@ -1,21 +1,31 @@
 name: Release
 
 on:
-  push:
-    branches: [staging]
-    tags:
-      - 'v*'
+  pull_request:
+    types: [closed]
+    branches:
+      - release
+      - beta
+
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.1.1)'
+        description: 'Version to release (e.g., 0.4.0)'
         required: true
+      prerelease:
+        description: 'Mark as pre-release'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   build:
+    # Only run when a PR is merged (not just closed), or on manual dispatch
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true)
     strategy:
       fail-fast: false
       matrix:
@@ -65,9 +75,10 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           echo "machine github.com login x-access-token password ${GITHUB_TOKEN}" > ~/.netrc
           chmod 600 ~/.netrc
-          git clone --depth 1 --branch "${GITHUB_REF_NAME}" \
+          BRANCH="${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}"
+          git clone --depth 1 --branch "${BRANCH}" \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" . || \
-          git clone --depth 1 --branch staging \
+          git clone --depth 1 --branch release \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -84,16 +95,30 @@ jobs:
       - name: Checkout (macOS)
         if: startsWith(matrix.platform, 'macos')
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+
+      # ── Determine release channel ──────────────────────────────────
+      - name: Set release channel
+        run: |
+          TARGET_BRANCH="${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}"
+          if [ "$TARGET_BRANCH" = "beta" ] || [ "${{ inputs.prerelease }}" = "true" ]; then
+            echo "CHANNEL=beta" >> "$GITHUB_ENV"
+            echo "PRERELEASE=true" >> "$GITHUB_ENV"
+          else
+            echo "CHANNEL=stable" >> "$GITHUB_ENV"
+            echo "PRERELEASE=false" >> "$GITHUB_ENV"
+          fi
 
       # ── Clone polyrepo components ──────────────────────────────────
       - name: Clone compiler (Stage 1 source)
         run: |
-          git clone --depth 1 --recurse-submodules --branch staging \
+          git clone --depth 1 --recurse-submodules --branch master \
             https://github.com/dark-matter-tech/rockit-compiler.git /tmp/compiler
 
       - name: Clone and build Stage 0 (booster)
         run: |
-          git clone --depth 1 --branch develop \
+          git clone --depth 1 --branch master \
             https://github.com/dark-matter-tech/rockit-booster.git /tmp/booster
           cd /tmp/booster && swift build -c release
 
@@ -101,17 +126,17 @@ jobs:
       - name: Set version
         run: |
           if [ -n "${{ inputs.version }}" ]; then
-            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
-            echo "TAG=v${{ inputs.version }}" >> "$GITHUB_ENV"
-          elif echo "${GITHUB_REF_NAME}" | grep -q "^v"; then
-            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            VERSION="${{ inputs.version }}"
           else
             RAW_VERSION=$(grep 'compilerVersion\|let version' /tmp/booster/Sources/RockitKit/CompilerPipeline.swift 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9._-]*' | head -1)
             VERSION="${RAW_VERSION:-0.3.0}"
-            echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-            echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
           fi
+          if [ "$CHANNEL" = "beta" ]; then
+            # Append -beta suffix if not already present
+            echo "$VERSION" | grep -q "beta" || VERSION="${VERSION}-beta"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
 
       # ── Build Stage 1 compiler ─────────────────────────────────────
       - name: Build Stage 1 compiler
@@ -119,7 +144,7 @@ jobs:
           cd /tmp/compiler
           bash src/build.sh
           if [ "${{ matrix.platform }}" = "windows-x86_64" ]; then
-            # Cross-compile for Windows: emit LLVM IR → clang → mingw → .exe
+            # Cross-compile for Windows: emit LLVM IR -> clang -> mingw -> .exe
             /tmp/booster/.build/release/rockit emit-llvm src/command.rok > src/command.ll
             echo "LLVM IR emitted ($(wc -l < src/command.ll) lines)"
             clang-15 -c -O2 -target x86_64-w64-mingw32 src/command.ll -o src/command.o
@@ -139,11 +164,13 @@ jobs:
       - name: Determine version from Stage 1
         run: |
           if [ "${{ matrix.platform }}" = "windows-x86_64" ]; then
-            # Can't run .exe on Linux — use version from Set version step
             echo "Using version from env: ${VERSION}"
           else
             DETECTED=$(/tmp/compiler/src/command version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
             if [ -n "$DETECTED" ]; then
+              if [ "$CHANNEL" = "beta" ]; then
+                echo "$DETECTED" | grep -q "beta" || DETECTED="${DETECTED}-beta"
+              fi
               echo "VERSION=${DETECTED}" >> "$GITHUB_ENV"
               echo "TAG=v${DETECTED}" >> "$GITHUB_ENV"
               echo "Detected version: ${DETECTED}"
@@ -180,7 +207,7 @@ jobs:
       # ── Build LSP ──────────────────────────────────────────────────
       - name: Clone and build LSP
         run: |
-          git clone --depth 1 --branch develop \
+          git clone --depth 1 --branch master \
             https://github.com/dark-matter-tech/rockit-lsp.git /tmp/lsp || true
           if [ -d /tmp/lsp ]; then
             cd /tmp/lsp && swift build -c release 2>&1 || echo "LSP build failed (non-fatal)"
@@ -235,6 +262,9 @@ jobs:
 
   create-release:
     needs: build
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true)
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -244,6 +274,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+
+      - name: Set release channel
+        run: |
+          TARGET_BRANCH="${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}"
+          if [ "$TARGET_BRANCH" = "beta" ] || [ "${{ inputs.prerelease }}" = "true" ]; then
+            echo "PRERELEASE=--prerelease" >> "$GITHUB_ENV"
+          else
+            echo "PRERELEASE=" >> "$GITHUB_ENV"
+          fi
 
       - name: Detect version from artifacts
         run: |
@@ -276,6 +315,7 @@ jobs:
 
           gh release create "${TAG}" \
             --title "Rockit ${TAG}" \
+            ${PRERELEASE} \
             --notes "$(cat <<NOTES
 ## Rockit ${TAG}
 
@@ -299,7 +339,7 @@ jobs:
 ### Install
 
 \`\`\`bash
-curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/develop/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/master/scripts/install.sh | bash
 \`\`\`
 NOTES
           )" \
@@ -332,7 +372,7 @@ NOTES
             -H "Authorization: token ${FUEL_TOKEN}" \
             -H "Content-Type: application/json" \
             "${GITEA_API}/repos/${GITEA_REPO}/tags" \
-            -d "{\"tag_name\": \"${TAG}\", \"target\": \"staging\"}" 2>/dev/null || true
+            -d "{\"tag_name\": \"${TAG}\", \"target\": \"release\"}" 2>/dev/null || true
 
           # Create release
           RELEASE_ID=$(curl -s -X POST \
