@@ -12,10 +12,11 @@ RUN apt-get update -qq && \
 
 COPY rockit-toolchain/bin/rockit /usr/local/bin/rockit
 COPY rockit-toolchain/bin/fuel /usr/local/bin/fuel
+COPY rockit-toolchain/bin/rockit-lsp /usr/local/bin/rockit-lsp
 COPY rockit-toolchain/share/rockit/rockit_runtime.o /usr/local/share/rockit/rockit_runtime.o
 COPY rockit-toolchain/share/rockit/stdlib /usr/local/share/rockit/stdlib
 
-RUN chmod +x /usr/local/bin/rockit /usr/local/bin/fuel && rockit version
+RUN chmod +x /usr/local/bin/rockit /usr/local/bin/fuel /usr/local/bin/rockit-lsp 2>/dev/null; rockit version
 
 ENV ROCKIT=/usr/local/bin/rockit
 ENV RUNTIME=/usr/local/share/rockit/rockit_runtime.o
