@@ -2,7 +2,7 @@
 # Dark Matter Tech
 #
 # Usage (PowerShell):
-#   irm https://rustygits.com/Dark-Matter/rockit-lang/raw/branch/develop/scripts/uninstall.ps1 | iex
+#   irm https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/develop/scripts/uninstall.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 

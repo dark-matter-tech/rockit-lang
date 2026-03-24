@@ -2,15 +2,15 @@
 # Dark Matter Tech
 #
 # Usage (PowerShell):
-#   irm https://rustygits.com/Dark-Matter/rockit-lang/raw/branch/develop/scripts/install.ps1 | iex
+#   irm https://github.com/dark-matter-tech/rockit-lang/raw/branch/develop/scripts/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
-$VERSION = "0.1.0"
-$GITEA = "https://rustygits.com"
-$REPO_LANG = "Dark-Matter/rockit-lang"
-$REPO_COMPILER = "Dark-Matter/rockit-compiler"
-$REPO_FUEL = "Dark-Matter/fuel"
+$VERSION = "0.3.0"
+$GITEA = "https://github.com"
+$REPO_LANG = "dark-matter-tech/rockit-lang"
+$REPO_COMPILER = "dark-matter-tech/rockit-compiler"
+$REPO_FUEL = "dark-matter-tech/rockit-fuel"
 $INSTALL_DIR = "$env:LOCALAPPDATA\Rockit\bin"
 $SHARE_DIR = "$env:LOCALAPPDATA\Rockit\share\rockit"
 
@@ -326,7 +326,7 @@ if ($downloaded) {
 
     # Clone Stage 0 bootstrap
     Write-Info "Downloading bootstrap compiler..."
-    git clone --depth 1 --branch develop "$GITEA/Dark-Matter/rockit-booster.git" "$tmp\booster" 2>&1 | Out-Null
+    git clone --depth 1 --branch develop "$GITEA/dark-matter-tech/rockit-booster.git" "$tmp\booster" 2>&1 | Out-Null
 
     Pop-Location
 

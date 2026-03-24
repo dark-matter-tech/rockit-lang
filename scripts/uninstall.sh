@@ -3,7 +3,7 @@
 # Dark Matter Tech
 #
 # Usage:
-#   curl -fsSL https://rustygits.com/Dark-Matter/rockit-lang/raw/branch/develop/scripts/uninstall.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/develop/scripts/uninstall.sh | bash
 
 set -euo pipefail
 

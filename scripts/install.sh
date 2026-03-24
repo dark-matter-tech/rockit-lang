@@ -3,21 +3,21 @@
 # Dark Matter Tech
 #
 # Usage:
-#   curl -fsSL https://rustygits.com/Dark-Matter/rockit-lang/raw/branch/develop/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/develop/scripts/install.sh | bash
 
 set -euo pipefail
 
-VERSION="0.1.0"
-GITEA="https://rustygits.com"
-REPO_LANG="Dark-Matter/rockit-lang"
-REPO_COMPILER="Dark-Matter/rockit-compiler"
-REPO_FUEL="Dark-Matter/fuel"
+VERSION="0.3.0"
+GITHUB="https://github.com"
+REPO_LANG="dark-matter-tech/rockit-lang"
+REPO_COMPILER="dark-matter-tech/rockit-compiler"
+REPO_FUEL="dark-matter-tech/rockit-fuel"
 PREFIX="${ROCKIT_PREFIX:-/usr/local}"
 BIN_DIR="${PREFIX}/bin"
 SHARE_DIR="${PREFIX}/share/rockit"
 
 # Signing key URL — the GPG public key used to sign release manifests
-SIGNING_KEY_URL="${GITEA}/${REPO_LANG}/raw/branch/develop/keys/darkmatter-release.asc"
+SIGNING_KEY_URL="${GITHUB}/${REPO_LANG}/raw/develop/keys/darkmatter-release.asc"
 SIGNING_KEY_ID="Dark Matter Tech <security@darkmatter.tech>"
 
 RED='\033[0;31m'
@@ -168,7 +168,7 @@ verify_manifest_hashes() {
 install_binary() {
     local platform="$1"
     local archive="rockit-${VERSION}-${platform}.tar.gz"
-    local url="${GITEA}/${REPO_LANG}/releases/download/v${VERSION}/${archive}"
+    local url="${GITHUB}/${REPO_LANG}/releases/download/v${VERSION}/${archive}"
     local tmp="/tmp/rockit-install-$$"
 
     info "Checking for prebuilt binary (${platform})..."
@@ -184,7 +184,7 @@ install_binary() {
 
         if [ -f "${extracted}/MANIFEST.sha256" ]; then
             if [ ! -f "${extracted}/MANIFEST.sha256.sig" ]; then
-                local sig_url="${GITEA}/${REPO_LANG}/releases/download/v${VERSION}/MANIFEST.sha256.sig"
+                local sig_url="${GITHUB}/${REPO_LANG}/releases/download/v${VERSION}/MANIFEST.sha256.sig"
                 curl -fsSL "$sig_url" -o "${extracted}/MANIFEST.sha256.sig" 2>/dev/null || true
             fi
             verify_manifest_signature "${extracted}/MANIFEST.sha256"
@@ -196,7 +196,11 @@ install_binary() {
         sudo mkdir -p "${BIN_DIR}" "${SHARE_DIR}"
         sudo cp "${extracted}/bin/rockit" "${BIN_DIR}/rockit"
         sudo cp "${extracted}/bin/fuel" "${BIN_DIR}/fuel"
+        if [ -f "${extracted}/bin/rockit-lsp" ]; then
+            sudo cp "${extracted}/bin/rockit-lsp" "${BIN_DIR}/rockit-lsp"
+        fi
         sudo chmod +x "${BIN_DIR}/rockit" "${BIN_DIR}/fuel"
+        [ -f "${BIN_DIR}/rockit-lsp" ] && sudo chmod +x "${BIN_DIR}/rockit-lsp"
         sudo cp "${extracted}/share/rockit/rockit_runtime.o" "${SHARE_DIR}/rockit_runtime.o"
         if [ -d "${extracted}/share/rockit/stdlib" ]; then
             sudo cp -r "${extracted}/share/rockit/stdlib" "${SHARE_DIR}/stdlib"
@@ -216,7 +220,7 @@ install_source() {
 
     command -v swift >/dev/null 2>&1 || fail "Swift 5.9+ is required to build from source.
   Install from https://swift.org/download
-  Or wait for prebuilt binaries at ${GITEA}/${REPO_LANG}/releases"
+  Or wait for prebuilt binaries at ${GITHUB}/${REPO_LANG}/releases"
     command -v git >/dev/null 2>&1 || fail "Git is required."
 
     local tmp="/tmp/rockit-build-$$"
@@ -225,11 +229,11 @@ install_source() {
 
     # Clone compiler (includes Stage 1 source, runtime, stdlib submodule)
     info "Downloading Rockit compiler..."
-    git clone --depth 1 --recurse-submodules --branch develop "${GITEA}/${REPO_COMPILER}.git" "${tmp}/compiler" 2>&1 | tail -1
+    git clone --depth 1 --recurse-submodules --branch develop "${GITHUB}/${REPO_COMPILER}.git" "${tmp}/compiler" 2>&1 | tail -1
 
     # Clone Stage 0 bootstrap compiler
     info "Downloading bootstrap compiler..."
-    git clone --depth 1 --branch develop "${GITEA}/Dark-Matter/rockit-booster.git" "${tmp}/booster" 2>&1 | tail -1
+    git clone --depth 1 --branch develop "${GITHUB}/Dark-Matter/rockit-booster.git" "${tmp}/booster" 2>&1 | tail -1
 
     # Build Stage 0
     info "Building bootstrap compiler..."
@@ -248,7 +252,7 @@ install_source() {
 
     # Clone and build Fuel
     info "Building Fuel package manager..."
-    git clone --depth 1 --branch develop "${GITEA}/${REPO_FUEL}.git" "${tmp}/fuel" 2>&1 | tail -1
+    git clone --depth 1 --branch develop "${GITHUB}/${REPO_FUEL}.git" "${tmp}/fuel" 2>&1 | tail -1
     src/command build-native "${tmp}/fuel/src/fuel.rok" -o "${tmp}/fuel/fuel" --runtime-path runtime/rockit_runtime.o
 
     # Install
