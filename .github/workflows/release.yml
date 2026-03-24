@@ -112,6 +112,7 @@ jobs:
 
       - name: Clone and build Stage 0
         run: |
+          mkdir -p /tmp 2>/dev/null || true
           git clone --depth 1 --branch develop \
             https://github.com/dark-matter-tech/rockit-booster.git /tmp/booster
           cd /tmp/booster && swift build -c release
