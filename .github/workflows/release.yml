@@ -157,9 +157,13 @@ jobs:
 
       - name: Build LSP
         run: |
-          git clone --depth 1 --branch develop \
+          git clone --depth 1 --branch master \
             https://github.com/dark-matter-tech/rockit-lsp.git /tmp/lsp
-          cd /tmp/lsp && swift build -c release
+          cd /tmp/lsp
+          export ROCKIT_COMPILER_DIR=/tmp/compiler
+          export ROCKIT_RUNTIME_DIR=/tmp/compiler/runtime
+          export PATH="/tmp/booster/.build/release:$PATH"
+          bash build.sh
         shell: bash
 
       - name: Package archive (Unix)
@@ -174,8 +178,8 @@ jobs:
             cp /tmp/fuel/fuel "${STAGING}/bin/fuel"
             chmod +x "${STAGING}/bin/fuel"
           fi
-          if [ -f /tmp/lsp/.build/release/rockit-lsp ]; then
-            cp /tmp/lsp/.build/release/rockit-lsp "${STAGING}/bin/rockit-lsp"
+          if [ -f /tmp/lsp/rockit-lsp ]; then
+            cp /tmp/lsp/rockit-lsp "${STAGING}/bin/rockit-lsp"
             chmod +x "${STAGING}/bin/rockit-lsp"
           fi
           cp /tmp/compiler/runtime/rockit_runtime.o "${STAGING}/share/rockit/"
@@ -194,7 +198,7 @@ jobs:
           Copy-Item "/tmp/compiler/src/command.exe" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
           Copy-Item "/tmp/compiler/src/command" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
           if (Test-Path "/tmp/fuel/fuel.exe") { Copy-Item "/tmp/fuel/fuel.exe" "$staging/bin/fuel.exe" }
-          if (Test-Path "/tmp/lsp/.build/release/rockit-lsp.exe") { Copy-Item "/tmp/lsp/.build/release/rockit-lsp.exe" "$staging/bin/rockit-lsp.exe" }
+          if (Test-Path "/tmp/lsp/rockit-lsp.exe") { Copy-Item "/tmp/lsp/rockit-lsp.exe" "$staging/bin/rockit-lsp.exe" }
           if (Test-Path "/tmp/compiler/runtime/rockit_runtime.o") {
             Copy-Item "/tmp/compiler/runtime/rockit_runtime.o" "$staging/share/rockit/"
           }
@@ -258,6 +262,7 @@ jobs:
 
           - **rockit** — The Rockit compiler (self-hosted)
           - **fuel** — The Rockit package manager
+          - **rockit-lsp** — Language server (written in Rockit)
           - **stdlib** — Standard library (15 modules)
           - **rockit_runtime.o** — Prebuilt runtime
 
