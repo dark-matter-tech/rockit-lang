@@ -72,9 +72,13 @@ jobs:
 
       - name: Build LSP
         run: |
-          git clone --depth 1 --branch develop \
+          git clone --depth 1 --branch master \
             https://github.com/dark-matter-tech/rockit-lsp.git /tmp/lsp
-          cd /tmp/lsp && swift build -c release
+          cd /tmp/lsp
+          export ROCKIT_COMPILER_DIR=/tmp/compiler
+          export ROCKIT_RUNTIME_DIR=/tmp/compiler/runtime
+          export PATH="/tmp/booster/.build/release:$PATH"
+          bash build.sh
 
       - name: Bootstrap verification
         run: |
@@ -111,7 +115,7 @@ jobs:
           mkdir -p "${STAGING}/bin" "${STAGING}/share/rockit"
           cp /tmp/compiler/src/command "${STAGING}/bin/rockit"
           cp /tmp/fuel/fuel "${STAGING}/bin/fuel"
-          cp /tmp/lsp/.build/release/rockit-lsp "${STAGING}/bin/rockit-lsp"
+          cp /tmp/lsp/rockit-lsp "${STAGING}/bin/rockit-lsp"
           chmod +x "${STAGING}/bin/rockit" "${STAGING}/bin/fuel" "${STAGING}/bin/rockit-lsp"
           cp /tmp/compiler/runtime/rockit_runtime.o "${STAGING}/share/rockit/"
           cp -r /tmp/compiler/launchpad "${STAGING}/share/rockit/stdlib"

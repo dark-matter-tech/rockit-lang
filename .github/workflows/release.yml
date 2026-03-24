@@ -1,31 +1,21 @@
 name: Release
 
 on:
-  pull_request:
-    types: [closed]
-    branches:
-      - release
-      - beta
-
+  push:
+    branches: [staging]
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.4.0)'
+        description: 'Version to release (e.g., 0.1.1)'
         required: true
-      prerelease:
-        description: 'Mark as pre-release'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
 
 jobs:
   build:
-    # Only run when a PR is merged (not just closed), or on manual dispatch
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.merged == true)
     strategy:
       fail-fast: false
       matrix:
@@ -46,44 +36,36 @@ jobs:
             archive_ext: tar.gz
             triple: x86_64-apple-macosx
           - platform: windows-x86_64
-            runner: ubuntu-22.04
-            container: swift:5.10.1-jammy
+            runner: windows-latest
+            container: ""
             archive_ext: zip
-            triple: x86_64-w64-windows-gnu
+            triple: x86_64-unknown-windows-msvc
 
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container || null }}
-    continue-on-error: ${{ matrix.platform == 'macos-x86_64' || matrix.platform == 'windows-x86_64' }}
+    continue-on-error: ${{ matrix.platform == 'windows-x86_64' || matrix.platform == 'macos-x86_64' }}
     defaults:
       run:
-        shell: bash
+        shell: ${{ matrix.platform == 'windows-x86_64' && 'pwsh' || 'bash' }}
 
     steps:
-      # ── Linux / Windows cross-compile ──────────────────────────────
+      # -- Linux --
       - name: Install dependencies (Linux)
-        if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64'
+        if: matrix.platform == 'linux-x86_64'
         run: |
           apt-get update && apt-get install -y git clang-15 curl jq libssl-dev pkg-config gnupg
           ln -sf /usr/bin/clang-15 /usr/bin/clang
-          if [ "${{ matrix.platform }}" = "windows-x86_64" ]; then
-            apt-get install -y mingw-w64 zip
-          fi
 
       - name: Checkout (Linux)
-        if: matrix.platform == 'linux-x86_64' || matrix.platform == 'windows-x86_64'
+        if: matrix.platform == 'linux-x86_64'
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          echo "machine github.com login x-access-token password ${GITHUB_TOKEN}" > ~/.netrc
-          chmod 600 ~/.netrc
-          BRANCH="${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}"
-          git clone --depth 1 --branch "${BRANCH}" \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" . || \
-          git clone --depth 1 --branch release \
+          git clone --depth 1 --branch "${GITHUB_REF_NAME}" \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      # ── macOS ──────────────────────────────────────────────────────
+      # -- macOS --
       - name: Install dependencies (macOS)
         if: startsWith(matrix.platform, 'macos')
         run: |
@@ -92,128 +74,98 @@ jobs:
           echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib" >> "$GITHUB_ENV"
           echo "CPPFLAGS=-I$(brew --prefix openssl@3)/include" >> "$GITHUB_ENV"
 
-      - name: Checkout (macOS)
-        if: startsWith(matrix.platform, 'macos')
+      - name: Checkout (macOS/Windows)
+        if: matrix.platform != 'linux-x86_64'
         uses: actions/checkout@v4
+
+      # -- Windows --
+      - name: Install Swift (Windows)
+        if: matrix.platform == 'windows-x86_64'
+        uses: compnerd/gha-setup-swift@main
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          branch: swift-5.10.1-release
+          tag: 5.10.1-RELEASE
 
-      # ── Determine release channel ──────────────────────────────────
-      - name: Set release channel
+      - name: Install dependencies (Windows)
+        if: matrix.platform == 'windows-x86_64'
         run: |
-          TARGET_BRANCH="${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}"
-          if [ "$TARGET_BRANCH" = "beta" ] || [ "${{ inputs.prerelease }}" = "true" ]; then
-            echo "CHANNEL=beta" >> "$GITHUB_ENV"
-            echo "PRERELEASE=true" >> "$GITHUB_ENV"
-          else
-            echo "CHANNEL=stable" >> "$GITHUB_ENV"
-            echo "PRERELEASE=false" >> "$GITHUB_ENV"
-          fi
+          choco install openssl -y
+          choco install jq -y
 
-      # ── Clone polyrepo components ──────────────────────────────────
-      - name: Clone compiler (Stage 1 source)
-        run: |
-          git clone --depth 1 --recurse-submodules --branch master \
-            https://github.com/dark-matter-tech/rockit-compiler.git /tmp/compiler
-
-      - name: Clone and build Stage 0 (booster)
-        run: |
-          git clone --depth 1 --branch master \
-            https://github.com/dark-matter-tech/rockit-booster.git /tmp/booster
-          cd /tmp/booster && swift build -c release
-
-      # ── Set version ────────────────────────────────────────────────
+      # -- Common build --
       - name: Set version
         run: |
           if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+            echo "TAG=v${{ inputs.version }}" >> "$GITHUB_ENV"
           else
-            RAW_VERSION=$(grep 'compilerVersion\|let version' /tmp/booster/Sources/RockitKit/CompilerPipeline.swift 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9._-]*' | head -1)
-            VERSION="${RAW_VERSION:-0.3.0}"
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
           fi
-          if [ "$CHANNEL" = "beta" ]; then
-            # Append -beta suffix if not already present
-            echo "$VERSION" | grep -q "beta" || VERSION="${VERSION}-beta"
-          fi
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
+        shell: bash
 
-      # ── Build Stage 1 compiler ─────────────────────────────────────
-      - name: Build Stage 1 compiler
+      - name: Clone compiler
+        run: |
+          git clone --depth 1 --recurse-submodules --branch staging \
+            https://github.com/dark-matter-tech/rockit-compiler.git /tmp/compiler
+        shell: bash
+
+      - name: Clone and build Stage 0
+        run: |
+          git clone --depth 1 --branch develop \
+            https://github.com/dark-matter-tech/rockit-booster.git /tmp/booster
+          cd /tmp/booster && swift build -c release
+        shell: bash
+
+      - name: Build Stage 1
         run: |
           cd /tmp/compiler
           bash src/build.sh
-          if [ "${{ matrix.platform }}" = "windows-x86_64" ]; then
-            # Cross-compile for Windows: emit LLVM IR -> clang -> mingw -> .exe
-            /tmp/booster/.build/release/rockit emit-llvm src/command.rok > src/command.ll
-            echo "LLVM IR emitted ($(wc -l < src/command.ll) lines)"
-            clang-15 -c -O2 -target x86_64-w64-mingw32 src/command.ll -o src/command.o
-            echo "Compiled to Windows object file"
-            # Cross-compile runtime for Windows
-            x86_64-w64-mingw32-gcc -c -O2 runtime/rockit_runtime.c -o runtime/rockit_runtime_win.o \
-              -I runtime/ 2>&1 || echo "Runtime cross-compile warnings (non-fatal)"
-            # Link into .exe
-            x86_64-w64-mingw32-gcc -O2 src/command.o runtime/rockit_runtime_win.o \
-              -o src/command.exe -lws2_32 -lm -static
-            echo "Stage 1 cross-compiled for Windows"
-          else
-            /tmp/booster/.build/release/rockit build-native src/command.rok
-            echo "Stage 1 compiler built"
-          fi
+          /tmp/booster/.build/release/rockit build-native src/command.rok
+        shell: bash
 
-      - name: Determine version from Stage 1
+      - name: Determine version
         run: |
-          if [ "${{ matrix.platform }}" = "windows-x86_64" ]; then
-            echo "Using version from env: ${VERSION}"
+          DETECTED=$(/tmp/compiler/src/command version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+          if [ -n "$DETECTED" ]; then
+            echo "VERSION=${DETECTED}" >> "$GITHUB_ENV"
+            echo "TAG=v${DETECTED}" >> "$GITHUB_ENV"
+            echo "Detected version: ${DETECTED}"
+          elif [ "$VERSION" = "staging" ] || [ -z "$VERSION" ]; then
+            echo "VERSION=0.3.0" >> "$GITHUB_ENV"
+            echo "TAG=v0.3.0" >> "$GITHUB_ENV"
+            echo "Using default version: 0.3.0"
           else
-            DETECTED=$(/tmp/compiler/src/command version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
-            if [ -n "$DETECTED" ]; then
-              if [ "$CHANNEL" = "beta" ]; then
-                echo "$DETECTED" | grep -q "beta" || DETECTED="${DETECTED}-beta"
-              fi
-              echo "VERSION=${DETECTED}" >> "$GITHUB_ENV"
-              echo "TAG=v${DETECTED}" >> "$GITHUB_ENV"
-              echo "Detected version: ${DETECTED}"
-            fi
+            echo "Using ref version: ${VERSION}"
           fi
+        shell: bash
 
-      # ── Build runtime ──────────────────────────────────────────────
       - name: Build runtime
-        run: |
-          if [ "${{ matrix.platform }}" = "windows-x86_64" ]; then
-            echo "Runtime already cross-compiled in Build Stage 1 step"
-          else
-            cd /tmp/compiler && bash runtime/rockit/build.sh
-          fi
+        run: cd /tmp/compiler && bash runtime/rockit/build.sh
+        shell: bash
 
-      # ── Build Fuel ─────────────────────────────────────────────────
       - name: Clone and build Fuel
         run: |
-          git clone --depth 1 --branch master \
+          git clone --depth 1 --branch develop \
             https://github.com/dark-matter-tech/rockit-fuel.git /tmp/fuel || true
           if [ -d /tmp/fuel ]; then
-            if [ "${{ matrix.platform }}" = "windows-x86_64" ]; then
-              /tmp/booster/.build/release/rockit emit-llvm /tmp/fuel/src/fuel.rok > /tmp/fuel/src/fuel.ll
-              clang-15 -c -O2 -target x86_64-w64-mingw32 /tmp/fuel/src/fuel.ll -o /tmp/fuel/src/fuel.o
-              x86_64-w64-mingw32-gcc -O2 /tmp/fuel/src/fuel.o /tmp/compiler/runtime/rockit_runtime_win.o \
-                -o /tmp/fuel/fuel.exe -lws2_32 -lm -static 2>&1 || echo "Fuel cross-compile failed (non-fatal)"
-            else
-              /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok -o /tmp/fuel/fuel \
-                --runtime-path /tmp/compiler/runtime/rockit_runtime.o \
-                --target-triple ${{ matrix.triple }}
-            fi
+            /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
+              -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o \
+              --target-triple ${{ matrix.triple }}
           fi
+        shell: bash
 
-      # ── Build LSP ──────────────────────────────────────────────────
-      - name: Clone and build LSP
+      - name: Build LSP
         run: |
           git clone --depth 1 --branch master \
-            https://github.com/dark-matter-tech/rockit-lsp.git /tmp/lsp || true
-          if [ -d /tmp/lsp ]; then
-            cd /tmp/lsp && swift build -c release 2>&1 || echo "LSP build failed (non-fatal)"
-          fi
+            https://github.com/dark-matter-tech/rockit-lsp.git /tmp/lsp
+          cd /tmp/lsp
+          export ROCKIT_COMPILER_DIR=/tmp/compiler
+          export ROCKIT_RUNTIME_DIR=/tmp/compiler/runtime
+          export PATH="/tmp/booster/.build/release:$PATH"
+          bash build.sh
+        shell: bash
 
-      # ── Package ────────────────────────────────────────────────────
       - name: Package archive (Unix)
         if: matrix.archive_ext == 'tar.gz'
         run: |
@@ -226,33 +178,35 @@ jobs:
             cp /tmp/fuel/fuel "${STAGING}/bin/fuel"
             chmod +x "${STAGING}/bin/fuel"
           fi
-          if [ -f /tmp/lsp/.build/release/rockit-lsp ]; then
-            cp /tmp/lsp/.build/release/rockit-lsp "${STAGING}/bin/rockit-lsp"
+          if [ -f /tmp/lsp/rockit-lsp ]; then
+            cp /tmp/lsp/rockit-lsp "${STAGING}/bin/rockit-lsp"
             chmod +x "${STAGING}/bin/rockit-lsp"
           fi
           cp /tmp/compiler/runtime/rockit_runtime.o "${STAGING}/share/rockit/"
           cp -r /tmp/compiler/launchpad "${STAGING}/share/rockit/stdlib"
           cd dist && tar -czf "${ARCHIVE}" "rockit-${VERSION}-${{ matrix.platform }}"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
-          ls -la "${ARCHIVE}"
+        shell: bash
 
       - name: Package archive (Windows)
         if: matrix.archive_ext == 'zip'
         run: |
-          ARCHIVE="rockit-${VERSION}-${{ matrix.platform }}.zip"
-          STAGING="dist/rockit-${VERSION}-${{ matrix.platform }}/rockit"
-          mkdir -p "${STAGING}/bin" "${STAGING}/share/rockit"
-          cp /tmp/compiler/src/command.exe "${STAGING}/bin/rockit.exe"
-          if [ -f /tmp/fuel/fuel.exe ]; then
-            cp /tmp/fuel/fuel.exe "${STAGING}/bin/fuel.exe"
-          fi
-          if [ -f /tmp/compiler/runtime/rockit_runtime_win.o ]; then
-            cp /tmp/compiler/runtime/rockit_runtime_win.o "${STAGING}/share/rockit/rockit_runtime.o"
-          fi
-          cp -r /tmp/compiler/launchpad "${STAGING}/share/rockit/stdlib"
-          cd dist && zip -r "${ARCHIVE}" "rockit-${VERSION}-${{ matrix.platform }}"
-          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
-          ls -la "${ARCHIVE}"
+          $archive = "rockit-$env:VERSION-${{ matrix.platform }}.zip"
+          $staging = "dist/rockit-$env:VERSION-${{ matrix.platform }}/rockit"
+          New-Item -ItemType Directory -Force -Path "$staging/bin"
+          New-Item -ItemType Directory -Force -Path "$staging/share/rockit"
+          Copy-Item "/tmp/compiler/src/command.exe" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
+          Copy-Item "/tmp/compiler/src/command" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
+          if (Test-Path "/tmp/fuel/fuel.exe") { Copy-Item "/tmp/fuel/fuel.exe" "$staging/bin/fuel.exe" }
+          if (Test-Path "/tmp/lsp/rockit-lsp.exe") { Copy-Item "/tmp/lsp/rockit-lsp.exe" "$staging/bin/rockit-lsp.exe" }
+          if (Test-Path "/tmp/compiler/runtime/rockit_runtime.o") {
+            Copy-Item "/tmp/compiler/runtime/rockit_runtime.o" "$staging/share/rockit/"
+          }
+          if (Test-Path "/tmp/compiler/launchpad") {
+            Copy-Item -Recurse "/tmp/compiler/launchpad" "$staging/share/rockit/stdlib"
+          }
+          Compress-Archive -Path "dist/rockit-$env:VERSION-${{ matrix.platform }}/*" -DestinationPath "dist/$archive"
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -262,27 +216,12 @@ jobs:
 
   create-release:
     needs: build
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.merged == true)
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
-
-      - name: Set release channel
-        run: |
-          TARGET_BRANCH="${GITHUB_BASE_REF:-${GITHUB_REF_NAME}}"
-          if [ "$TARGET_BRANCH" = "beta" ] || [ "${{ inputs.prerelease }}" = "true" ]; then
-            echo "PRERELEASE=--prerelease" >> "$GITHUB_ENV"
-          else
-            echo "PRERELEASE=" >> "$GITHUB_ENV"
-          fi
 
       - name: Detect version from artifacts
         run: |
@@ -310,109 +249,79 @@ jobs:
             done
           done
 
-          # Delete existing release if re-running
-          gh release delete "${TAG}" --yes --cleanup-tag 2>/dev/null || true
+          # Delete existing release if present
+          gh release delete "${TAG}" --repo "${GITHUB_REPOSITORY}" --yes 2>/dev/null || true
 
           gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "Rockit ${TAG}" \
-            ${PRERELEASE} \
             --notes "$(cat <<NOTES
-## Rockit ${TAG}
+          ## Rockit ${TAG}
 
-### What's Included
+          ### What's Included
 
-- **rockit** — The Rockit compiler (self-hosted)
-- **fuel** — The Rockit package manager
-- **rockit-lsp** — Language Server Protocol server
-- **stdlib** — Standard library (15 modules)
-- **rockit_runtime.o** — Prebuilt runtime
+          - **rockit** — The Rockit compiler (self-hosted)
+          - **fuel** — The Rockit package manager
+          - **rockit-lsp** — Language server (written in Rockit)
+          - **stdlib** — Standard library (15 modules)
+          - **rockit_runtime.o** — Prebuilt runtime
 
-### Platforms
+          ### Platforms
 
-| Platform | Archive |
-|----------|---------|
-| Linux x86_64 | \`rockit-${VERSION}-linux-x86_64.tar.gz\` |
-| macOS arm64 | \`rockit-${VERSION}-macos-arm64.tar.gz\` |
-| macOS x86_64 | \`rockit-${VERSION}-macos-x86_64.tar.gz\` |
-| Windows x86_64 | \`rockit-${VERSION}-windows-x86_64.zip\` |
+          | Platform | Archive |
+          |----------|---------|
+          | Linux x86_64 | \`rockit-${VERSION}-linux-x86_64.tar.gz\` |
+          | macOS arm64 | \`rockit-${VERSION}-macos-arm64.tar.gz\` |
+          | macOS x86_64 | \`rockit-${VERSION}-macos-x86_64.tar.gz\` |
+          | Windows x86_64 | \`rockit-${VERSION}-windows-x86_64.zip\` |
 
-### Install
+          ### Install
 
-\`\`\`bash
-curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/master/scripts/install.sh | bash
-\`\`\`
-NOTES
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/dark-matter-tech/rockit-lang/develop/scripts/install.sh | bash
+          \`\`\`
+          NOTES
           )" \
             $FILES
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Mirror release to Gitea
-        continue-on-error: true
+  push-docker:
+    name: Push Docker toolchain image
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rockit-linux-x86_64
+          path: artifacts/
+
+      - name: Prepare Docker context
         run: |
-          GITEA_API="https://rustygits.com/api/v1"
-          GITEA_REPO="Dark-Matter/rockit-lang"
+          TARBALL=$(ls artifacts/rockit-*-linux-x86_64.tar.gz | head -1)
+          tar -xzf "$TARBALL" -C artifacts/
+          DIR=$(ls -d artifacts/rockit-*-linux-x86_64 | head -1)
+          VERSION=$(echo "$DIR" | sed 's/.*rockit-\(.*\)-linux-x86_64/\1/')
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
+          mkdir -p rockit-toolchain/bin rockit-toolchain/share/rockit
+          cp "${DIR}/rockit/bin/"* rockit-toolchain/bin/
+          cp "${DIR}/rockit/share/rockit/rockit_runtime.o" rockit-toolchain/share/rockit/
+          cp -r "${DIR}/rockit/share/rockit/stdlib" rockit-toolchain/share/rockit/
 
-          # Delete existing release if present
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: token ${FUEL_TOKEN}" \
-            "${GITEA_API}/repos/${GITEA_REPO}/releases/tags/${TAG}")
-          if [ "$STATUS" = "200" ]; then
-            RELEASE_ID=$(curl -s \
-              -H "Authorization: token ${FUEL_TOKEN}" \
-              "${GITEA_API}/repos/${GITEA_REPO}/releases/tags/${TAG}" | jq -r '.id')
-            curl -s -X DELETE \
-              -H "Authorization: token ${FUEL_TOKEN}" \
-              "${GITEA_API}/repos/${GITEA_REPO}/releases/${RELEASE_ID}"
-            echo "Deleted existing Gitea release ${TAG}"
-          fi
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-          # Create tag if needed
-          curl -s -X POST \
-            -H "Authorization: token ${FUEL_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "${GITEA_API}/repos/${GITEA_REPO}/tags" \
-            -d "{\"tag_name\": \"${TAG}\", \"target\": \"release\"}" 2>/dev/null || true
-
-          # Create release
-          RELEASE_ID=$(curl -s -X POST \
-            -H "Authorization: token ${FUEL_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "${GITEA_API}/repos/${GITEA_REPO}/releases" \
-            -d "{
-              \"tag_name\": \"${TAG}\",
-              \"name\": \"Rockit ${TAG}\",
-              \"body\": \"Mirrored from GitHub. See https://github.com/dark-matter-tech/rockit-lang/releases/tag/${TAG}\",
-              \"draft\": false,
-              \"prerelease\": false
-            }" | jq -r '.id')
-
-          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
-            echo "WARNING: Failed to create Gitea release"
-            exit 0
-          fi
-          echo "Created Gitea release ID: ${RELEASE_ID}"
-
-          # Upload all artifacts
-          for artifact_dir in artifacts/rockit-*; do
-            for file in "$artifact_dir"/*; do
-              [ -f "$file" ] || continue
-              FILENAME=$(basename "$file")
-              CONTENT_TYPE="application/gzip"
-              echo "$FILENAME" | grep -q '\.zip$' && CONTENT_TYPE="application/zip"
-
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                -H "Authorization: token ${FUEL_TOKEN}" \
-                -H "Content-Type: ${CONTENT_TYPE}" \
-                --data-binary "@${file}" \
-                "${GITEA_API}/repos/${GITEA_REPO}/releases/${RELEASE_ID}/assets?name=${FILENAME}")
-
-              if [ "$HTTP_CODE" -ge 400 ]; then
-                echo "WARNING: Failed to upload ${FILENAME} to Gitea (HTTP ${HTTP_CODE})"
-              else
-                echo "Mirrored to Gitea: ${FILENAME}"
-              fi
-            done
-          done
-        env:
-          FUEL_TOKEN: ${{ secrets.FUEL_TOKEN }}
+      - name: Build and push
+        run: |
+          docker build -f Dockerfile -t ${{ secrets.DOCKERHUB_USERNAME }}/rockit-toolchain:${TAG} \
+                                     -t ${{ secrets.DOCKERHUB_USERNAME }}/rockit-toolchain:latest .
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/rockit-toolchain:${TAG}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/rockit-toolchain:latest
