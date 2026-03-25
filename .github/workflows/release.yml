@@ -93,7 +93,7 @@ jobs:
           choco install jq -y
 
       # -- Common build --
-      - name: Set version
+      - name: Set version and temp dir
         run: |
           if [ -n "${{ inputs.version }}" ]; then
             echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
@@ -102,32 +102,39 @@ jobs:
             echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
             echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
           fi
+          # Use RUNNER_TEMP on Windows, /tmp on Unix
+          if [ "${{ matrix.platform }}" = "windows-x86_64" ]; then
+            TMPBASE="$(cygpath "$RUNNER_TEMP")/rockit-build"
+          else
+            TMPBASE="/tmp"
+          fi
+          mkdir -p "$TMPBASE"
+          echo "TMPBASE=$TMPBASE" >> "$GITHUB_ENV"
         shell: bash
 
       - name: Clone compiler
         run: |
           git clone --depth 1 --recurse-submodules --branch staging \
-            https://github.com/dark-matter-tech/rockit-compiler.git /tmp/compiler
+            https://github.com/dark-matter-tech/rockit-compiler.git "$TMPBASE/compiler"
         shell: bash
 
       - name: Clone and build Stage 0
         run: |
-          mkdir -p /tmp 2>/dev/null || true
           git clone --depth 1 --branch develop \
-            https://github.com/dark-matter-tech/rockit-booster.git /tmp/booster
-          cd /tmp/booster && swift build -c release
+            https://github.com/dark-matter-tech/rockit-booster.git "$TMPBASE/booster"
+          cd "$TMPBASE/booster" && swift build -c release
         shell: bash
 
       - name: Build Stage 1
         run: |
-          cd /tmp/compiler
+          cd $TMPBASE/compiler
           bash src/build.sh
-          /tmp/booster/.build/release/rockit build-native src/command.rok
+          $TMPBASE/booster/.build/release/rockit build-native src/command.rok
         shell: bash
 
       - name: Determine version
         run: |
-          DETECTED=$(/tmp/compiler/src/command version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+          DETECTED=$($TMPBASE/compiler/src/command version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
           if [ -n "$DETECTED" ]; then
             echo "VERSION=${DETECTED}" >> "$GITHUB_ENV"
             echo "TAG=v${DETECTED}" >> "$GITHUB_ENV"
@@ -142,30 +149,29 @@ jobs:
         shell: bash
 
       - name: Build runtime
-        run: cd /tmp/compiler && bash runtime/rockit/build.sh
+        run: cd $TMPBASE/compiler && bash runtime/rockit/build.sh
         shell: bash
 
       - name: Clone and build Fuel
         run: |
           git clone --depth 1 --branch develop \
-            https://github.com/dark-matter-tech/rockit-fuel.git /tmp/fuel || true
-          if [ -d /tmp/fuel ]; then
-            /tmp/compiler/src/command build-native /tmp/fuel/src/fuel.rok \
-              -o /tmp/fuel/fuel --runtime-path /tmp/compiler/runtime/rockit_runtime.o \
+            https://github.com/dark-matter-tech/rockit-fuel.git $TMPBASE/fuel || true
+          if [ -d $TMPBASE/fuel ]; then
+            $TMPBASE/compiler/src/command build-native $TMPBASE/fuel/src/fuel.rok \
+              -o $TMPBASE/fuel/fuel --runtime-path $TMPBASE/compiler/runtime/rockit_runtime.o \
               --target-triple ${{ matrix.triple }}
           fi
         shell: bash
 
       - name: Build LSP
-        continue-on-error: true
         run: |
           git clone --depth 1 --branch master \
-            https://github.com/dark-matter-tech/rockit-lsp.git /tmp/lsp
-          cd /tmp/lsp
-          export ROCKIT_COMPILER_DIR=/tmp/compiler
-          export ROCKIT_RUNTIME_DIR=/tmp/compiler/runtime
-          export PATH="/tmp/booster/.build/release:$PATH"
-          bash build.sh || echo "LSP build failed (non-fatal)"
+            https://github.com/dark-matter-tech/rockit-lsp.git "$TMPBASE/lsp"
+          cd "$TMPBASE/lsp"
+          export ROCKIT_COMPILER_DIR="$TMPBASE/compiler"
+          export ROCKIT_RUNTIME_DIR="$TMPBASE/compiler/runtime"
+          export PATH="$TMPBASE/booster/.build/release:$PATH"
+          bash build.sh
         shell: bash
 
       - name: Package archive (Unix)
@@ -174,18 +180,18 @@ jobs:
           ARCHIVE="rockit-${VERSION}-${{ matrix.platform }}.tar.gz"
           STAGING="dist/rockit-${VERSION}-${{ matrix.platform }}/rockit"
           mkdir -p "${STAGING}/bin" "${STAGING}/share/rockit"
-          cp /tmp/compiler/src/command "${STAGING}/bin/rockit"
+          cp $TMPBASE/compiler/src/command "${STAGING}/bin/rockit"
           chmod +x "${STAGING}/bin/rockit"
-          if [ -f /tmp/fuel/fuel ]; then
-            cp /tmp/fuel/fuel "${STAGING}/bin/fuel"
+          if [ -f $TMPBASE/fuel/fuel ]; then
+            cp $TMPBASE/fuel/fuel "${STAGING}/bin/fuel"
             chmod +x "${STAGING}/bin/fuel"
           fi
-          if [ -f /tmp/lsp/rockit-lsp ]; then
-            cp /tmp/lsp/rockit-lsp "${STAGING}/bin/rockit-lsp"
+          if [ -f $TMPBASE/lsp/rockit-lsp ]; then
+            cp $TMPBASE/lsp/rockit-lsp "${STAGING}/bin/rockit-lsp"
             chmod +x "${STAGING}/bin/rockit-lsp"
           fi
-          cp /tmp/compiler/runtime/rockit_runtime.o "${STAGING}/share/rockit/"
-          cp -r /tmp/compiler/launchpad "${STAGING}/share/rockit/stdlib"
+          cp $TMPBASE/compiler/runtime/rockit_runtime.o "${STAGING}/share/rockit/"
+          cp -r $TMPBASE/compiler/launchpad "${STAGING}/share/rockit/stdlib"
           cd dist && tar -czf "${ARCHIVE}" "rockit-${VERSION}-${{ matrix.platform }}"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
         shell: bash
@@ -197,15 +203,15 @@ jobs:
           $staging = "dist/rockit-$env:VERSION-${{ matrix.platform }}/rockit"
           New-Item -ItemType Directory -Force -Path "$staging/bin"
           New-Item -ItemType Directory -Force -Path "$staging/share/rockit"
-          Copy-Item "/tmp/compiler/src/command.exe" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
-          Copy-Item "/tmp/compiler/src/command" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
-          if (Test-Path "/tmp/fuel/fuel.exe") { Copy-Item "/tmp/fuel/fuel.exe" "$staging/bin/fuel.exe" }
-          if (Test-Path "/tmp/lsp/rockit-lsp.exe") { Copy-Item "/tmp/lsp/rockit-lsp.exe" "$staging/bin/rockit-lsp.exe" }
-          if (Test-Path "/tmp/compiler/runtime/rockit_runtime.o") {
-            Copy-Item "/tmp/compiler/runtime/rockit_runtime.o" "$staging/share/rockit/"
+          Copy-Item "$TMPBASE/compiler/src/command.exe" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
+          Copy-Item "$TMPBASE/compiler/src/command" "$staging/bin/rockit.exe" -ErrorAction SilentlyContinue
+          if (Test-Path "$TMPBASE/fuel/fuel.exe") { Copy-Item "$TMPBASE/fuel/fuel.exe" "$staging/bin/fuel.exe" }
+          if (Test-Path "$TMPBASE/lsp/rockit-lsp.exe") { Copy-Item "$TMPBASE/lsp/rockit-lsp.exe" "$staging/bin/rockit-lsp.exe" }
+          if (Test-Path "$TMPBASE/compiler/runtime/rockit_runtime.o") {
+            Copy-Item "$TMPBASE/compiler/runtime/rockit_runtime.o" "$staging/share/rockit/"
           }
-          if (Test-Path "/tmp/compiler/launchpad") {
-            Copy-Item -Recurse "/tmp/compiler/launchpad" "$staging/share/rockit/stdlib"
+          if (Test-Path "$TMPBASE/compiler/launchpad") {
+            Copy-Item -Recurse "$TMPBASE/compiler/launchpad" "$staging/share/rockit/stdlib"
           }
           Compress-Archive -Path "dist/rockit-$env:VERSION-${{ matrix.platform }}/*" -DestinationPath "dist/$archive"
           echo "ARCHIVE=$archive" >> $env:GITHUB_ENV

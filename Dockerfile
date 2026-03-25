@@ -1,7 +1,7 @@
 FROM ubuntu:22.04
 
 LABEL org.opencontainers.image.title="Rockit Toolchain"
-LABEL org.opencontainers.image.description="Pre-built Rockit compiler, runtime, and stdlib"
+LABEL org.opencontainers.image.description="Pre-built Rockit compiler, runtime, stdlib, and language server"
 LABEL org.opencontainers.image.vendor="Dark Matter Tech"
 
 RUN apt-get update -qq && \
@@ -16,7 +16,8 @@ COPY rockit-toolchain/bin/rockit-lsp /usr/local/bin/rockit-lsp
 COPY rockit-toolchain/share/rockit/rockit_runtime.o /usr/local/share/rockit/rockit_runtime.o
 COPY rockit-toolchain/share/rockit/stdlib /usr/local/share/rockit/stdlib
 
-RUN chmod +x /usr/local/bin/rockit /usr/local/bin/fuel /usr/local/bin/rockit-lsp 2>/dev/null; rockit version
+RUN chmod +x /usr/local/bin/rockit /usr/local/bin/fuel /usr/local/bin/rockit-lsp && \
+    rockit version
 
 ENV ROCKIT=/usr/local/bin/rockit
 ENV RUNTIME=/usr/local/share/rockit/rockit_runtime.o
